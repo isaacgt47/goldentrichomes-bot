@@ -5,10 +5,9 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Messa
 
 # ── CONFIG ──
 BOT_TOKEN   = "8689166931:AAFweXM9nYW9YoY6-W0INnNURCCXpJ7bMjU"
-MINIAPP_URL = "https://TON_URL_NETLIFY.netlify.app"   # ← remplace par ton URL Netlify
+MINIAPP_URL = "https://goldentrichomes-shop.netlify.app"
 ADMIN_IDS   = [7524388895]  # ← ton Telegram ID (tu peux en ajouter d'autres)
-ADMIN_URL   = "https://TON_URL_ADMIN.netlify.app"     # ← URL du panel admin si hébergé
-
+ADMIN_URL   = "https://goldentrichomes-admin.netlify.app"
 logging.basicConfig(level=logging.INFO)
 
 # ── /start ──

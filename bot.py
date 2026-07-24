@@ -5,9 +5,9 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Messa
 
 # ── CONFIG ──
 BOT_TOKEN   = "8689166931:AAFweXM9nYW9YoY6-W0INnNURCCXpJ7bMjU"
-MINIAPP_URL = "https://goldentrichomes-shop.netlify.app"
+MINIAPP_URL = "https://melodic-baklava-cd5a09.netlify.app/"
 ADMIN_IDS   = [7524388895]  # ← ton Telegram ID (tu peux en ajouter d'autres)
-ADMIN_URL   = "https://goldentrichomes-admin.netlify.app"
+ADMIN_URL   = "inquisitive-lokum-bfa632.netlify.app"
 logging.basicConfig(level=logging.INFO)
 
 # ── /start ──

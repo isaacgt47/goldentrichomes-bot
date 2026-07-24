@@ -26,8 +26,8 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"Salam {name} 👋\n\n"
         f"Bienvenue chez *GoldenTrichomes* 🌿\n\n"
         f"✨ Drysift · Frozen · Static · Ice O'Lator\n"
-        f"🏔️ Beldia · Weed · HerbVape\n\n"
-        f"Qualité marocaine, livraison Amsterdam 🇳🇱\n\n"
+        f"🏔️ Beldia · Accessoires\n\n"
+        f"Qualité marocaine, livraison Partout au Maroc MA\n\n"
         f"👇 Clique pour commander :",
         parse_mode="Markdown",
         reply_markup=keyboard

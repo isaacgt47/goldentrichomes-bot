@@ -3,7 +3,7 @@ import urllib.request, urllib.parse
 
 # ── CONFIG ──
 BOT_TOKEN   = "8689166931:AAFweXM9nYW9YoY6-W0INnNURCCXpJ7bMjU"
-MINIAPP_URL = "https://goldentrichomes.netlify.app"        # ← ton URL Mini App
+MINIAPP_URL = "https://melodic-baklava-cd5a09.netlify.app"        # ← ton URL Mini App
 ADMIN_URL   = "https://inquisitive-lokum-bfa632.netlify.app"
 GROUP_ID    = "-5383453640"
 

@@ -79,7 +79,8 @@ app.post('/webhook', (req, res) => {
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   await bot.sendMessage(chatId,
-    `🌿 *Bienvenue sur GoldenTrichomes* 🌿\n\nQualité marocaine certifiée · Amsterdam\n\nClique ci-dessous pour commander :`,
+    `🌿 *Bienvenue sur GoldenTrichomes* 🌿\n\✨ Drysift · Frozen · Static · Ice O'Lator
+🏔️ Beldia · Accessoires ·Morocco 🇲🇦\n\nClique ci-dessous pour commander :`,
     {
       parse_mode: 'Markdown',
       reply_markup: {

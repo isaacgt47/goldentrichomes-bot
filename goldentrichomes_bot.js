@@ -271,7 +271,8 @@ bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const name   = msg.from?.first_name || 'là';
   await bot.sendMessage(chatId,
-    `🌿 *Bienvenue chez GoldenTrichomes* 🌿\n\nSalam ${name} 👋\n\nQualité marocaine, livraison Amsterdam 🇳🇱\n\n👇 Clique pour commander :`,
+    `🌿👑 *Bienvenue sur GoldenTrichomes* 👑🌿\n\✨ Drysift · Frozen · Static · Ice O'Lator
+🏔️ Beldia · Accessoires ·Morocco 🇲🇦\n\nClique ci-dessous pour commander `,
     {
       parse_mode: 'Markdown',
       reply_markup: {

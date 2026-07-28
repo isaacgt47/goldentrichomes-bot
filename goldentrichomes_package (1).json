@@ -1,0 +1,21 @@
+{
+  "name": "goldentrichomes-bot",
+  "version": "1.0.0",
+  "description": "GoldenTrichomes Telegram Bot + Crypto Payments",
+  "main": "goldentrichomes_bot.js",
+  "scripts": {
+    "start": "node goldentrichomes_bot.js",
+    "dev": "nodemon goldentrichomes_bot.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.64.0",
+    "firebase-admin": "^12.0.0",
+    "axios": "^1.6.0",
+    "qrcode": "^1.5.3",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

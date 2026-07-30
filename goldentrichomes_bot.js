@@ -9,7 +9,7 @@ const axios       = require('axios');
    ══════════════════════════════════════════ */
 const CONFIG = {
   BOT_TOKEN:    process.env.BOT_TOKEN   || '8689166931:AAFweXM9nYW9YoY6-W0INnNURCCXpJ7bMjU',
-  ADMIN_CHAT:   process.env.ADMIN_CHAT  || '5383453640',   /* ton Chat ID perso */
+  ADMIN_CHAT:   process.env.ADMIN_CHAT  || '-5108947245',   /* ton Chat ID perso */
   GROUP_CHAT:   process.env.GROUP_CHAT  || '-5108947245',  /* ton groupe commandes */
   WEBHOOK_URL:  process.env.WEBHOOK_URL || 'https://goldentrichomes-bot-production.up.railway.app',
   MINI_APP_URL: 'https://melodic-baklava-cd5a09.netlify.app/',

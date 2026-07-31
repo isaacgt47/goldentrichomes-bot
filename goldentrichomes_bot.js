@@ -98,34 +98,45 @@ function buildButtons(orderId, status) {
   return { inline_keyboard: rows };
 }
 
+/* Échappe les caractères spéciaux Markdown Telegram */
+function escapeMd(s){ return String(s||'').replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&'); }
+
 function buildOrderText(order, orderId) {
   const status = order.status || 'new';
   const statut = STATUTS[status] || STATUTS.new;
   const items  = (order.items || [])
-    .map(i => `  • ${i.name} ${i.weight||i.w||''}g × ${i.qty} = ${((i.priceMAD||i.price||0)*i.qty).toLocaleString('fr-MA')} MAD`)
+    .map(i => `  • ${escapeMd(i.name)} ${i.weight||i.w||''}g × ${i.qty} = ${((i.priceMAD||i.price||0)*i.qty).toLocaleString('fr-MA')} MAD`)
     .join('\n');
   const date = order.createdAt?.toDate
     ? order.createdAt.toDate().toLocaleString('fr-MA', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})
     : new Date().toLocaleString('fr-MA');
 
+  const name  = (order.customerName || order.name || '—').replace(/[<>&]/g,'');
+  const phone = (order.customerPhone || order.phone || '—').replace(/[<>&]/g,'');
+  const ville = (order.shopName || order.shop || '—').replace(/[<>&]/g,'');
+  const slot  = (order.slot || '—').replace(/[<>&]/g,'');
+  const addr  = (order.address || '').replace(/[<>&]/g,'');
+  const tgU   = (order.telegramUser || '').replace(/[<>&]/g,'');
+  const code  = (order.code || orderId.slice(0,8).toUpperCase()).replace(/[<>&]/g,'');
+
   return (
-    `${statut.emoji} *Commande GoldenTrichomes*\n` +
+    `${statut.emoji} <b>Commande GoldenTrichomes</b>\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📋 Code : \`${order.code || orderId.slice(0,8).toUpperCase()}\`\n` +
+    `📋 Code : <code>${code}</code>\n` +
     `📅 Date : ${date}\n` +
-    `👤 Client : ${order.customerName || order.name || '—'}\n` +
-    `📞 Tél : ${order.customerPhone || order.phone || '—'}\n` +
-    (order.telegramUser ? `✈️ Telegram : @${order.telegramUser}\n` : '') +
-    `📍 Ville : ${order.shopName || order.shop || '—'}\n` +
-    `🕐 Créneau : ${order.slot || '—'}\n` +
+    `👤 Client : ${name}\n` +
+    `📞 Tél : ${phone}\n` +
+    (tgU ? `✈️ Telegram : @${tgU}\n` : '') +
+    `📍 Ville : ${ville}\n` +
+    `🕐 Créneau : ${slot}\n` +
     `💳 Paiement : ${payLabel(order.payment)}\n` +
     `🚚 Livraison : ${order.delivery === 'delivery' ? '🛵 À domicile' : '🏪 Click & Collect'}\n` +
-    (order.address ? `📍 Adresse : ${order.address}\n` : '') +
+    (addr ? `📍 Adresse : ${addr}\n` : '') +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `${items || '  (aucun article)'}\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `💰 *Total : ${(order.totalMAD || order.total || 0).toLocaleString('fr-MA')} MAD*\n` +
-    `📊 Statut : *${statut.label}*`
+    `💰 <b>Total : ${(order.totalMAD || order.total || 0).toLocaleString('fr-MA')} MAD</b>\n` +
+    `📊 Statut : <b>${statut.label}</b>`
   );
 }
 
@@ -150,7 +161,7 @@ async function sendOrderToGroup(orderId, order) {
   const buttons = buildButtons(orderId, order.status || 'new');
   try {
     const msg = await bot.sendMessage(CONFIG.GROUP_CHAT, text, {
-      parse_mode:   'Markdown',
+      parse_mode:   'HTML',
       reply_markup: buttons,
     });
     /* Sauvegarde le message_id pour éviter les doublons */
@@ -202,7 +213,7 @@ bot.on('callback_query', async (query) => {
       await bot.editMessageText(newText, {
         chat_id:      query.message.chat.id,
         message_id:   query.message.message_id,
-        parse_mode:   'Markdown',
+        parse_mode:   'HTML',
         reply_markup: newBtns,
       }).catch(() => {});
 
@@ -222,7 +233,7 @@ bot.on('callback_query', async (query) => {
           cancelled: `❌ Ta commande *${order.code}* a été annulée.`,
         };
         const clientMsg = msgs[newStatus];
-        if (clientMsg) await bot.sendMessage(order.clientChatId, clientMsg, { parse_mode: 'Markdown' }).catch(() => {});
+        if (clientMsg) await bot.sendMessage(order.clientChatId, clientMsg, { parse_mode: 'HTML' }).catch(() => {});
       }
     } catch(e) {
       console.error('status callback error:', e);
@@ -277,7 +288,7 @@ bot.onText(/\/start/, async (msg) => {
       `4. Choisis un @username\n` +
       `5. Reviens ici et tape /start\n\n` +
       `C'est gratuit et prend 30 secondes ! 🙏`,
-      { parse_mode: 'Markdown' }
+      { parse_mode: 'HTML' }
     );
   }
   /* Enregistre le client dans Firebase */
@@ -293,7 +304,7 @@ bot.onText(/\/start/, async (msg) => {
   await bot.sendMessage(chatId,
     `🌿 *Bienvenue chez GoldenTrichomes* 🌿\n\nSalam ${name} 👋\n\nQualité marocaine, livraison partout au Maroc 🇲🇦\n\n👇 Clique pour commander :`,
     {
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [[{
           text: '🛒 Ouvrir la boutique',
@@ -326,7 +337,7 @@ bot.onText(/\/stats/, async (msg) => {
   bot.sendMessage(msg.chat.id,
     `📊 *Stats GoldenTrichomes*\n\n` +
     `🔄 En cours : ${actives.size}\n✅ Livrées : ${done.size}\n📦 Total : ${all.size}\n💰 Revenus : ${revenue.toLocaleString('fr-MA')} MAD`,
-    { parse_mode: 'Markdown' }
+    { parse_mode: 'HTML' }
   );
 });
 
@@ -343,7 +354,7 @@ bot.onText(/\/stock/, async (msg) => {
     const icon   = p.stockGrams === 0 ? '❌' : p.stockGrams < 10 ? '⚠️' : '✅';
     text += `${icon} ${p.name} — *${stockG}g*\n`;
   });
-  bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
+  bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML' });
 });
 
 /* ══════════════════════════════════════════

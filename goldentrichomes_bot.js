@@ -9,12 +9,11 @@ const axios       = require('axios');
    ══════════════════════════════════════════ */
 const CONFIG = {
   BOT_TOKEN:    process.env.BOT_TOKEN   || '8689166931:AAFweXM9nYW9YoY6-W0INnNURCCXpJ7bMjU',
-  ADMIN_CHAT:   process.env.ADMIN_CHAT  || '-5108947245',   /* ton Chat ID perso */
-  GROUP_CHAT:   process.env.GROUP_CHAT  || '-5108947245',  /* ton groupe commandes */
+  ADMIN_CHAT:   process.env.ADMIN_CHAT  || '5383453640',
+  GROUP_CHAT:   process.env.GROUP_CHAT  || '-1003981429957',
   WEBHOOK_URL:  process.env.WEBHOOK_URL || 'https://goldentrichomes-bot-production.up.railway.app',
   MINI_APP_URL: 'https://melodic-baklava-cd5a09.netlify.app/',
   PORT:         process.env.PORT        || 3000,
-
   WALLETS: {
     BTC:        'bc1qep4m47qeluj9jvdhp4ft4qcmk9r4w34u6xxuyd',
     ETH:        '0x0918234e6e8202AF158fde6328B8643846EfDeb0',
@@ -24,18 +23,19 @@ const CONFIG = {
   },
 };
 
+/* Anti-doublon — garde en mémoire les orderId déjà envoyés */
+const sentOrders = new Set();
+
 /* ══════════════════════════════════════════
    FIREBASE ADMIN
    ══════════════════════════════════════════ */
 let db;
 try {
-  /* Essai via fichier local */
   const sa = require('./serviceAccount.json');
   admin.initializeApp({ credential: admin.credential.cert(sa) });
   db = admin.firestore();
   console.log('✅ Firebase connecté (serviceAccount.json)');
 } catch(e) {
-  /* Essai via variable d'environnement Railway */
   try {
     const sa = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || '{}');
     if (sa.project_id) {
@@ -43,7 +43,7 @@ try {
       db = admin.firestore();
       console.log('✅ Firebase connecté (env variable)');
     } else {
-      console.warn('⚠️  Firebase non connecté — ajoute serviceAccount.json ou GOOGLE_APPLICATION_CREDENTIALS_JSON');
+      console.warn('⚠️  Firebase non connecté');
     }
   } catch(e2) {
     console.warn('⚠️  Firebase non connecté:', e2.message);
@@ -56,71 +56,56 @@ try {
 const bot = new TelegramBot(CONFIG.BOT_TOKEN, { polling: false });
 const app = express();
 app.use(express.json());
+/* CORS — permet les appels depuis Netlify */
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
 app.get('/', (req, res) => res.json({ status: 'GoldenTrichomes Bot Online 🌿' }));
-
-app.post('/webhook', (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
-});
+app.post('/webhook', (req, res) => { bot.processUpdate(req.body); res.sendStatus(200); });
 
 /* ══════════════════════════════════════════
-   STATUTS — FLOW COMPLET
+   STATUTS
    ══════════════════════════════════════════ */
 const STATUTS = {
-  new:         { label: '🆕 Nouvelle',       emoji: '🆕', next: 'confirmed'   },
-  confirmed:   { label: '✅ Confirmée',       emoji: '✅', next: 'preparing'   },
-  preparing:   { label: '👨‍🍳 En préparation', emoji: '👨‍🍳', next: 'ready'      },
-  ready:       { label: '📦 Prête',           emoji: '📦', next: 'delivered'   },
-  delivered:   { label: '🚴 Livrée',          emoji: '🚴', next: 'paid'        },
-  paid:        { label: '💰 Payée',           emoji: '💰', next: null          },
-  cancelled:   { label: '❌ Annulée',         emoji: '❌', next: null          },
+  new:       { label: '🆕 Nouvelle',        emoji: '🆕', next: 'confirmed'  },
+  confirmed: { label: '✅ Confirmée',        emoji: '✅', next: 'preparing'  },
+  preparing: { label: '👨‍🍳 En préparation', emoji: '👨‍🍳', next: 'ready'     },
+  ready:     { label: '📦 Prête',            emoji: '📦', next: 'delivered'  },
+  delivered: { label: '🚴 Livrée',           emoji: '🚴', next: 'paid'       },
+  paid:      { label: '💰 Payée',            emoji: '💰', next: null         },
+  cancelled: { label: '❌ Annulée',          emoji: '❌', next: null         },
 };
 
-/* Boutons selon le statut actuel */
 function buildButtons(orderId, status) {
   const rows = [];
-
-  /* Bouton principal — avancer au statut suivant */
   const current = STATUTS[status] || STATUTS.new;
   if (current.next) {
     const next = STATUTS[current.next];
-    rows.push([{
-      text: `${next.emoji} Marquer "${next.label.replace(/^.\s/, '')}"`,
-      callback_data: `status:${orderId}:${current.next}`,
-    }]);
+    rows.push([{ text: `${next.emoji} ${next.label.replace(/^.\s/,'')}`, callback_data: `status:${orderId}:${current.next}` }]);
   }
-
-  /* Bouton payé si pas encore payé */
   if (status !== 'paid' && status !== 'cancelled') {
     rows.push([
-      { text: '💰 Marquer Payée', callback_data: `status:${orderId}:paid` },
-      { text: '❌ Annuler',       callback_data: `status:${orderId}:cancelled` },
+      { text: '💰 Marquer Payée',  callback_data: `status:${orderId}:paid`      },
+      { text: '❌ Annuler',        callback_data: `status:${orderId}:cancelled`  },
     ]);
   }
-
-  /* Bouton détails */
   rows.push([{ text: '🔍 Voir les détails', callback_data: `details:${orderId}` }]);
-
   return { inline_keyboard: rows };
 }
 
-/* Texte de la carte commande */
 function buildOrderText(order, orderId) {
-  const status  = order.status || 'new';
-  const statut  = STATUTS[status] || STATUTS.new;
-  const items   = (order.items || [])
-    .map(i => `  • ${i.name} ${i.weight || ''}g × ${i.qty} = ${((i.priceMAD || i.price || 0) * i.qty).toFixed(0)} MAD`)
+  const status = order.status || 'new';
+  const statut = STATUTS[status] || STATUTS.new;
+  const items  = (order.items || [])
+    .map(i => `  • ${i.name} ${i.weight||i.w||''}g × ${i.qty} = ${((i.priceMAD||i.price||0)*i.qty).toLocaleString('fr-MA')} MAD`)
     .join('\n');
-  const date    = order.createdAt?.toDate
-    ? order.createdAt.toDate().toLocaleString('fr-MA', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })
+  const date = order.createdAt?.toDate
+    ? order.createdAt.toDate().toLocaleString('fr-MA', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})
     : new Date().toLocaleString('fr-MA');
 
   return (
@@ -130,26 +115,37 @@ function buildOrderText(order, orderId) {
     `📅 Date : ${date}\n` +
     `👤 Client : ${order.customerName || order.name || '—'}\n` +
     `📞 Tél : ${order.customerPhone || order.phone || '—'}\n` +
-    `📍 Ville : ${order.shop || order.city || '—'}\n` +
+    (order.telegramUser ? `✈️ Telegram : @${order.telegramUser}\n` : '') +
+    `📍 Ville : ${order.shopName || order.shop || '—'}\n` +
     `🕐 Créneau : ${order.slot || '—'}\n` +
     `💳 Paiement : ${payLabel(order.payment)}\n` +
+    `🚚 Livraison : ${order.delivery === 'delivery' ? '🛵 À domicile' : '🏪 Click & Collect'}\n` +
+    (order.address ? `📍 Adresse : ${order.address}\n` : '') +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `${items || '  (aucun article)'}\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `💰 *Total : ${(order.total || 0).toFixed(0)} MAD*\n` +
+    `💰 *Total : ${(order.totalMAD || order.total || 0).toLocaleString('fr-MA')} MAD*\n` +
     `📊 Statut : *${statut.label}*`
   );
 }
 
 function payLabel(p) {
-  const map = { cash:'💵 Cash', card:'💳 Carte', crypto:'₿ Crypto', btc:'₿ Bitcoin', eth:'Ξ Ethereum', sol:'◎ Solana', usdt:'$ USDT' };
-  return map[p] || p || '—';
+  return { cash:'💵 Cash', card:'💳 Carte', crypto:'₿ Crypto', btc:'₿ Bitcoin', eth:'Ξ Ethereum', sol:'◎ Solana', usdt:'$ USDT' }[p] || p || '—';
 }
 
 /* ══════════════════════════════════════════
    ENVOYER UNE COMMANDE AU GROUPE
    ══════════════════════════════════════════ */
 async function sendOrderToGroup(orderId, order) {
+  /* Anti-doublon — ignore si déjà envoyé */
+  if (sentOrders.has(orderId)) {
+    console.log(`⏭️  Doublon ignoré: ${orderId}`);
+    return;
+  }
+  sentOrders.add(orderId);
+  /* Nettoie après 1h pour éviter les fuites mémoire */
+  setTimeout(() => sentOrders.delete(orderId), 3600000);
+
   const text    = buildOrderText(order, orderId);
   const buttons = buildButtons(orderId, order.status || 'new');
   try {
@@ -157,11 +153,12 @@ async function sendOrderToGroup(orderId, order) {
       parse_mode:   'Markdown',
       reply_markup: buttons,
     });
-    /* Sauvegarde le message_id pour pouvoir l'éditer plus tard */
+    /* Sauvegarde le message_id pour éviter les doublons */
     if (db) {
       await db.collection('orders').doc(orderId).update({
-        groupMsgId:   msg.message_id,
-        groupChatId:  CONFIG.GROUP_CHAT,
+        groupMsgId:  msg.message_id,
+        groupChatId: CONFIG.GROUP_CHAT,
+        sentToGroup: true,
       }).catch(() => {});
     }
     return msg;
@@ -171,20 +168,17 @@ async function sendOrderToGroup(orderId, order) {
 }
 
 /* ══════════════════════════════════════════
-   CALLBACK BOUTONS INLINE
+   CALLBACK BOUTONS
    ══════════════════════════════════════════ */
 bot.on('callback_query', async (query) => {
-  const [action, orderId, newStatus] = query.data.split(':');
+  const parts   = query.data.split(':');
+  const action  = parts[0];
+  const orderId = parts[1];
+  const newStatus = parts[2];
   const employeeName = query.from.first_name || query.from.username || 'Employé';
 
-  /* ── Changement de statut ── */
   if (action === 'status') {
-    if (!orderId || !newStatus) {
-      return bot.answerCallbackQuery(query.id, { text: '❌ Données manquantes' });
-    }
-    if (!STATUTS[newStatus]) {
-      return bot.answerCallbackQuery(query.id, { text: '❌ Statut inconnu' });
-    }
+    if (!STATUTS[newStatus]) return bot.answerCallbackQuery(query.id, { text: '❌ Statut inconnu' });
     try {
       let order = {};
       if (db) {
@@ -198,29 +192,27 @@ bot.on('callback_query', async (query) => {
           [`statusHistory.${newStatus}`]: admin.firestore.FieldValue.serverTimestamp(),
           lastUpdatedBy: employeeName,
         });
-        order.status = newStatus;
       }
-
+      order.status = newStatus;
       const statut  = STATUTS[newStatus];
-      const newText = buildOrderText({ ...order, status: newStatus }, orderId);
+      const newText = buildOrderText(order, orderId);
       const newBtns = buildButtons(orderId, newStatus);
 
-      /* Édite le message dans le groupe */
+      /* Met à jour le message dans le groupe */
       await bot.editMessageText(newText, {
-        chat_id:    query.message.chat.id,
-        message_id: query.message.message_id,
-        parse_mode: 'Markdown',
+        chat_id:      query.message.chat.id,
+        message_id:   query.message.message_id,
+        parse_mode:   'Markdown',
         reply_markup: newBtns,
       }).catch(() => {});
 
-      /* Notifie l'employé qui a cliqué */
       await bot.answerCallbackQuery(query.id, {
-        text: `${statut.emoji} Statut mis à jour → ${statut.label} par ${employeeName}`,
+        text: `${statut.emoji} ${statut.label} — par ${employeeName}`,
         show_alert: false,
       });
 
-      /* Notifie le client si on a son chatId */
-      if (order.clientChatId && db) {
+      /* Notif client */
+      if (order.clientChatId) {
         const msgs = {
           confirmed: `✅ Ta commande *${order.code}* a été confirmée !`,
           preparing: `👨‍🍳 Ta commande *${order.code}* est en préparation !`,
@@ -230,9 +222,7 @@ bot.on('callback_query', async (query) => {
           cancelled: `❌ Ta commande *${order.code}* a été annulée.`,
         };
         const clientMsg = msgs[newStatus];
-        if (clientMsg) {
-          await bot.sendMessage(order.clientChatId, clientMsg, { parse_mode: 'Markdown' }).catch(() => {});
-        }
+        if (clientMsg) await bot.sendMessage(order.clientChatId, clientMsg, { parse_mode: 'Markdown' }).catch(() => {});
       }
     } catch(e) {
       console.error('status callback error:', e);
@@ -240,29 +230,26 @@ bot.on('callback_query', async (query) => {
     }
   }
 
-  /* ── Voir les détails ── */
   if (action === 'details') {
     try {
-      let details = `🔍 *Détails commande ${orderId.slice(0,8).toUpperCase()}*\n\n`;
+      let details = `🔍 *Détails commande*\n\n`;
       if (db) {
         const snap = await db.collection('orders').doc(orderId).get();
         if (snap.exists) {
           const o = snap.data();
-          details += `👤 ${o.customerName || o.name || '—'}\n`;
-          details += `📞 ${o.customerPhone || o.phone || '—'}\n`;
-          details += `📍 ${o.shop || o.city || '—'}\n`;
-          details += `🕐 ${o.slot || '—'}\n`;
+          details += `👤 ${o.customerName||'—'} · 📞 ${o.customerPhone||'—'}\n`;
+          details += `📍 ${o.shopName||o.shop||'—'} · 🕐 ${o.slot||'—'}\n`;
           details += `💳 ${payLabel(o.payment)}\n`;
-          details += `📊 Historique statuts :\n`;
+          if (o.lastUpdatedBy) details += `✏️ Dernière action : ${o.lastUpdatedBy}\n`;
           const hist = o.statusHistory || {};
-          Object.entries(hist).forEach(([s, t]) => {
-            const ts = t?.toDate ? t.toDate().toLocaleString('fr-MA') : '—';
-            details += `  • ${STATUTS[s]?.label || s} : ${ts}\n`;
-          });
-          if (o.lastUpdatedBy) details += `\n✏️ Dernière action par : ${o.lastUpdatedBy}`;
+          if (Object.keys(hist).length) {
+            details += `\n📊 Historique :\n`;
+            Object.entries(hist).forEach(([s, t]) => {
+              const ts = t?.toDate ? t.toDate().toLocaleString('fr-MA') : '—';
+              details += `  • ${STATUTS[s]?.label||s} : ${ts}\n`;
+            });
+          }
         }
-      } else {
-        details += 'Firebase non connecté.';
       }
       await bot.answerCallbackQuery(query.id, { text: details.slice(0, 200), show_alert: true });
     } catch(e) {
@@ -276,10 +263,35 @@ bot.on('callback_query', async (query) => {
    ══════════════════════════════════════════ */
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
-  const name   = msg.from?.first_name || 'là';
+  const name   = msg.from?.first_name || '';
+  /* Vérifie si l'utilisateur a un username */
+  if (!msg.from?.username) {
+    return bot.sendMessage(chatId,
+      `🌿 *Bienvenue chez GoldenTrichomes* 🌿\n\n` +
+      `Salam ${name} 👋\n\n` +
+      `⚠️ *Pour commander, tu dois avoir un @username Telegram.*\n\n` +
+      `Voici comment en créer un :\n` +
+      `1. Va dans *Paramètres Telegram*\n` +
+      `2. Clique sur ton profil\n` +
+      `3. Clique sur *Nom d'utilisateur*\n` +
+      `4. Choisis un @username\n` +
+      `5. Reviens ici et tape /start\n\n` +
+      `C'est gratuit et prend 30 secondes ! 🙏`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+  /* Enregistre le client dans Firebase */
+  if (db && msg.from?.id) {
+    await db.collection('clients').doc(String(msg.from.id)).set({
+      telegramId:       String(msg.from.id),
+      telegramUsername: msg.from.username,
+      firstName:        msg.from.first_name || '',
+      lastName:         msg.from.last_name  || '',
+      lastSeen:         admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true }).catch(() => {});
+  }
   await bot.sendMessage(chatId,
-    `🌿👑 *Bienvenue sur GoldenTrichomes* 👑🌿\n\✨ Drysift · Frozen · Static · Ice O'Lator
-🏔️ Beldia · Accessoires ·Morocco 🇲🇦\n\nClique ci-dessous pour commander `,
+    `🌿 *Bienvenue chez GoldenTrichomes* 🌿\n\nSalam ${name} 👋\n\nQualité marocaine, livraison partout au Maroc 🇲🇦\n\n👇 Clique pour commander :`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -296,56 +308,112 @@ bot.onText(/\/orders/, async (msg) => {
   if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT) return;
   if (!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
   const snap = await db.collection('orders')
-    .where('status', 'in', ['new', 'confirmed', 'preparing', 'ready'])
-    .orderBy('createdAt', 'desc')
-    .limit(10)
-    .get();
+    .where('status', 'in', ['new','confirmed','preparing','ready'])
+    .orderBy('createdAt','desc').limit(10).get();
   if (snap.empty) return bot.sendMessage(msg.chat.id, '✅ Aucune commande active');
-  for (const d of snap.docs) {
-    await sendOrderToGroup(d.id, d.data());
-  }
+  for (const d of snap.docs) await sendOrderToGroup(d.id, d.data());
 });
 
 bot.onText(/\/stats/, async (msg) => {
   if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT) return;
   if (!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
-  const [pending, done, all] = await Promise.all([
-    db.collection('orders').where('status', 'in', ['new','confirmed','preparing','ready']).get(),
-    db.collection('orders').where('status', '==', 'delivered').get(),
+  const [actives, done, all] = await Promise.all([
+    db.collection('orders').where('status','in',['new','confirmed','preparing','ready']).get(),
+    db.collection('orders').where('status','==','delivered').get(),
     db.collection('orders').get(),
   ]);
-  const revenue = done.docs.reduce((s, d) => s + (d.data().total || 0), 0);
+  const revenue = done.docs.reduce((s,d) => s+(d.data().totalMAD||d.data().total||0), 0);
   bot.sendMessage(msg.chat.id,
     `📊 *Stats GoldenTrichomes*\n\n` +
-    `🔄 En cours : ${pending.size}\n` +
-    `✅ Livrées : ${done.size}\n` +
-    `📦 Total : ${all.size}\n` +
-    `💰 Revenus : ${revenue.toFixed(0)} MAD`,
+    `🔄 En cours : ${actives.size}\n✅ Livrées : ${done.size}\n📦 Total : ${all.size}\n💰 Revenus : ${revenue.toLocaleString('fr-MA')} MAD`,
     { parse_mode: 'Markdown' }
   );
 });
 
+/* Stock check command */
+bot.onText(/\/stock/, async (msg) => {
+  if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT) return;
+  if (!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
+  const snap = await db.collection('products').orderBy('cat').get();
+  if (snap.empty) return bot.sendMessage(msg.chat.id, 'Aucun produit');
+  let text = `📦 *Stock GoldenTrichomes*\n━━━━━━━━━━━━━━━━\n`;
+  snap.docs.forEach(d => {
+    const p = d.data();
+    const stockG = p.stockGrams != null ? p.stockGrams : '∞';
+    const icon   = p.stockGrams === 0 ? '❌' : p.stockGrams < 10 ? '⚠️' : '✅';
+    text += `${icon} ${p.name} — *${stockG}g*\n`;
+  });
+  bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
+});
+
 /* ══════════════════════════════════════════
-   API ENDPOINTS — Mini App → Bot
+   API — POST /order
+   Reçoit la commande depuis la Mini App
    ══════════════════════════════════════════ */
 app.post('/order', async (req, res) => {
   try {
     const order = req.body;
-    if (!order || (!order.items?.length && !order.customerName)) {
+    if (!order || !order.customerName) {
       return res.status(400).json({ error: 'Commande invalide' });
     }
-    order.code      = 'GT-' + Math.floor(1000 + Math.random() * 9000);
-    order.status    = 'new';
-    order.createdAt = db ? admin.firestore.FieldValue.serverTimestamp() : new Date().toISOString();
 
-    let orderId = 'local_' + Date.now();
-    if (db) {
-      const ref = await db.collection('orders').add(order);
-      orderId   = ref.id;
+    /* ── Vérification stock en grammes ── */
+    if (db && order.items?.length) {
+      for (const item of order.items) {
+        if (!item.name) continue;
+        /* Cherche le produit par nom */
+        const pSnap = await db.collection('products')
+          .where('name', '==', item.name).limit(1).get();
+        if (!pSnap.empty) {
+          const prod    = pSnap.docs[0].data();
+          const prodId  = pSnap.docs[0].id;
+          const demande = (item.weight || item.w || 0) * (item.qty || 1);
+          if (prod.stockGrams != null && prod.stockGrams < demande) {
+            return res.status(400).json({
+              error: `Stock insuffisant pour ${item.name}. Disponible : ${prod.stockGrams}g`,
+              stockError: true,
+              product: item.name,
+              available: prod.stockGrams,
+            });
+          }
+        }
+      }
     }
 
-    /* Envoie au groupe */
-    await sendOrderToGroup(orderId, order);
+    /* ── Génère le code ── */
+    order.code      = order.code || ('GT-' + Math.floor(1000 + Math.random() * 9000));
+    order.status    = 'new';
+    order.sentToGroup = false;
+
+    /* ── Sauvegarde Firebase ── */
+    let orderId = 'local_' + Date.now();
+    if (db) {
+      order.createdAt = admin.firestore.FieldValue.serverTimestamp();
+      const ref = await db.collection('orders').add(order);
+      orderId   = ref.id;
+
+      /* ── Décrémente le stock ── */
+      for (const item of (order.items || [])) {
+        if (!item.name) continue;
+        const pSnap = await db.collection('products')
+          .where('name', '==', item.name).limit(1).get();
+        if (!pSnap.empty) {
+          const prodRef = pSnap.docs[0].ref;
+          const prod    = pSnap.docs[0].data();
+          const demande = (item.weight || item.w || 0) * (item.qty || 1);
+          if (prod.stockGrams != null) {
+            const newStock = Math.max(0, prod.stockGrams - demande);
+            await prodRef.update({
+              stockGrams: newStock,
+              stock: newStock === 0 ? 'out' : newStock < 10 ? 'low' : 'available',
+            });
+          }
+        }
+      }
+    }
+
+    /* ── Envoie au groupe avec boutons ── */
+    await sendOrderToGroup(orderId, { ...order, status: 'new' });
 
     res.json({ success: true, orderId, code: order.code });
   } catch(e) {
@@ -360,43 +428,15 @@ app.get('/rates', async (req, res) => {
       'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=mad',
       { timeout: 5000 }
     );
-    res.json({
-      BTC:        data.bitcoin?.mad  || 0,
-      ETH:        data.ethereum?.mad || 0,
-      SOL:        data.solana?.mad   || 0,
-      USDT_TRC20: 9.9,
-      USDT_ERC20: 9.9,
-    });
+    res.json({ BTC: data.bitcoin?.mad||0, ETH: data.ethereum?.mad||0, SOL: data.solana?.mad||0, USDT_TRC20: 9.9, USDT_ERC20: 9.9 });
   } catch(e) {
-    res.json({ BTC: 0, ETH: 0, SOL: 0, USDT_TRC20: 9.9, USDT_ERC20: 9.9 });
+    res.json({ BTC:0, ETH:0, SOL:0, USDT_TRC20:9.9, USDT_ERC20:9.9 });
   }
 });
 
 /* ══════════════════════════════════════════
-   FIRESTORE LISTENER — nouvelles commandes
-   ══════════════════════════════════════════ */
-function watchNewOrders() {
-  if (!db) return;
-  let firstRun = true;
-  db.collection('orders')
-    .where('status', '==', 'new')
-    .onSnapshot(snap => {
-      if (firstRun) { firstRun = false; return; }
-      snap.docChanges().forEach(async change => {
-        if (change.type === 'added') {
-          const order = change.doc.data();
-          /* Évite les doublons — envoie seulement si pas déjà de groupMsgId */
-          if (!order.groupMsgId) {
-            await sendOrderToGroup(change.doc.id, order).catch(console.error);
-          }
-        }
-      });
-    });
-  console.log('👁️  Écoute des nouvelles commandes active');
-}
-
-/* ══════════════════════════════════════════
-   DÉMARRAGE
+   DÉMARRAGE — PAS de watchNewOrders
+   pour éviter les doublons
    ══════════════════════════════════════════ */
 app.listen(CONFIG.PORT, async () => {
   console.log(`🚀 GoldenTrichomes Bot — port ${CONFIG.PORT}`);
@@ -406,7 +446,8 @@ app.listen(CONFIG.PORT, async () => {
   } catch(e) {
     console.error('Webhook error:', e.message);
   }
-  watchNewOrders();
+  /* PAS de watchNewOrders — évite les doublons */
+  console.log('✅ Bot prêt — envoi via /order uniquement');
 });
 
 module.exports = { app, bot, sendOrderToGroup };

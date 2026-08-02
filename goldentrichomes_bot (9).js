@@ -225,7 +225,7 @@ bot.on('callback_query', async (query) => {
       /* Notif client */
       if (order.clientChatId) {
         const msgs = {
-          confirmed: `✅ Ta commande *${order.code}* a été confirmée !`,
+          confirmed: `✅ Ta commande *${order.code}* a été confirmée.!`,
           preparing: `👨‍🍳 Ta commande *${order.code}* est en préparation !`,
           ready:     `📦 Ta commande *${order.code}* est prête ! Viens la récupérer.`,
           delivered: `🚴 Ta commande *${order.code}* est en route !`,

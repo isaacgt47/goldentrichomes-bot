@@ -10,7 +10,11 @@ const axios       = require('axios');
 const CONFIG = {
   BOT_TOKEN:    process.env.BOT_TOKEN   || '8689166931:AAFweXM9nYW9YoY6-W0INnNURCCXpJ7bMjU',
   ADMIN_CHAT:   process.env.ADMIN_CHAT  || '5383453640',
-  GROUP_CHAT:   process.env.GROUP_CHAT  || '-1003981429957',
+  GROUP_CHAT:   process.env.GROUP_CHAT  || '-1003981429957',  /* groupe général */
+  CITY_GROUPS: {
+    casablanca: process.env.GROUP_CASA  || '-1004491131884',
+    rabat:      process.env.GROUP_RABAT || '-1003994458019',
+  },
   WEBHOOK_URL:  process.env.WEBHOOK_URL || 'https://goldentrichomes-bot-production.up.railway.app',
   MINI_APP_URL: 'https://melodic-baklava-cd5a09.netlify.app/',
   PORT:         process.env.PORT        || 3000,
@@ -148,34 +152,52 @@ function payLabel(p) {
    ENVOYER UNE COMMANDE AU GROUPE
    ══════════════════════════════════════════ */
 async function sendOrderToGroup(orderId, order) {
-  /* Anti-doublon — ignore si déjà envoyé */
+  /* Anti-doublon */
   if (sentOrders.has(orderId)) {
     console.log(`⏭️  Doublon ignoré: ${orderId}`);
     return;
   }
   sentOrders.add(orderId);
-  /* Nettoie après 1h pour éviter les fuites mémoire */
   setTimeout(() => sentOrders.delete(orderId), 3600000);
 
   const text    = buildOrderText(order, orderId);
   const buttons = buildButtons(orderId, order.status || 'new');
-  try {
-    const msg = await bot.sendMessage(CONFIG.GROUP_CHAT, text, {
-      parse_mode:   'HTML',
-      reply_markup: buttons,
-    });
-    /* Sauvegarde le message_id pour éviter les doublons */
-    if (db) {
-      await db.collection('orders').doc(orderId).update({
-        groupMsgId:  msg.message_id,
-        groupChatId: CONFIG.GROUP_CHAT,
-        sentToGroup: true,
-      }).catch(() => {});
-    }
-    return msg;
-  } catch(e) {
-    console.error('sendOrderToGroup error:', e.message);
+
+  /* Détermine les groupes destinataires */
+  const villeId = (order.villeId || order.shop || '').toLowerCase();
+  const groups  = [CONFIG.GROUP_CHAT]; /* toujours le groupe général */
+
+  /* Ajoute le groupe ville si configuré */
+  const cityGroup = CONFIG.CITY_GROUPS[villeId] || order.groupTgId || null;
+  if (cityGroup && cityGroup !== CONFIG.GROUP_CHAT) {
+    groups.push(cityGroup);
   }
+
+  console.log(`📨 Envoi commande ${orderId} aux groupes:`, groups, '| Ville:', villeId);
+
+  let firstMsg = null;
+  for (const chatId of groups) {
+    try {
+      const msg = await bot.sendMessage(chatId, text, {
+        parse_mode:   'HTML',
+        reply_markup: buttons,
+      });
+      if (!firstMsg) firstMsg = msg;
+    } catch(e) {
+      console.error(`sendOrderToGroup error [${chatId}]:`, e.message);
+    }
+  }
+
+  /* Sauvegarde le message_id du groupe général */
+  if (db && firstMsg) {
+    await db.collection('orders').doc(orderId).update({
+      groupMsgId:   firstMsg.message_id,
+      groupChatId:  CONFIG.GROUP_CHAT,
+      cityGroupId:  cityGroup || null,
+      sentToGroup:  true,
+    }).catch(() => {});
+  }
+  return firstMsg;
 }
 
 /* ══════════════════════════════════════════
@@ -375,47 +397,24 @@ app.post('/order', async (req, res) => {
     }
 
     /* ── Vérification stock en grammes ── */
-    const villeId = order.villeId || order.shop || null;
     if (db && order.items?.length) {
       for (const item of order.items) {
         if (!item.name) continue;
-        try {
-          let snap = null;
-          /* 1. Cherche dans /boutiques/{villeId}/produits par nom */
-          if (villeId) {
-            const bSnap = await db.collection('boutiques').doc(villeId)
-              .collection('produits').where('nom', '==', item.name).limit(1).get();
-            if (!bSnap.empty) snap = bSnap;
+        /* Cherche le produit par nom */
+        const pSnap = await db.collection('products')
+          .where('name', '==', item.name).limit(1).get();
+        if (!pSnap.empty) {
+          const prod    = pSnap.docs[0].data();
+          const prodId  = pSnap.docs[0].id;
+          const demande = (item.weight || item.w || 0) * (item.qty || 1);
+          if (prod.stockGrams != null && prod.stockGrams < demande) {
+            return res.status(400).json({
+              error: `Stock insuffisant pour ${item.name}. Disponible : ${prod.stockGrams}g`,
+              stockError: true,
+              product: item.name,
+              available: prod.stockGrams,
+            });
           }
-          /* 2. Cherche dans /boutiques/{villeId}/produits par name */
-          if ((!snap || snap.empty) && villeId) {
-            const bSnap2 = await db.collection('boutiques').doc(villeId)
-              .collection('produits').where('name', '==', item.name).limit(1).get();
-            if (!bSnap2.empty) snap = bSnap2;
-          }
-          /* 3. Fallback: /products global */
-          if (!snap || snap.empty) {
-            const gSnap = await db.collection('products')
-              .where('name', '==', item.name).limit(1).get();
-            if (!gSnap.empty) snap = gSnap;
-          }
-          /* Vérifie le stock seulement si produit trouvé */
-          if (snap && !snap.empty) {
-            const prod    = snap.docs[0].data();
-            const demande = (item.weight || item.w || 0) * (item.qty || 1);
-            if (prod.stockGrams != null && prod.stockGrams < demande) {
-              return res.status(400).json({
-                error: `Stock insuffisant pour ${item.name}. Disponible : ${prod.stockGrams}g`,
-                stockError: true,
-                product: item.name,
-                available: prod.stockGrams,
-              });
-            }
-          }
-          /* Si produit non trouvé → on laisse passer (pas de blocage) */
-        } catch(se) {
-          console.error('Stock check error:', se.message);
-          /* En cas d'erreur → on laisse passer */
         }
       }
     }
@@ -432,39 +431,23 @@ app.post('/order', async (req, res) => {
       const ref = await db.collection('orders').add(order);
       orderId   = ref.id;
 
-      /* ── Décrémente le stock dans boutiques ET global ── */
+      /* ── Décrémente le stock ── */
       for (const item of (order.items || [])) {
         if (!item.name) continue;
-        try {
+        const pSnap = await db.collection('products')
+          .where('name', '==', item.name).limit(1).get();
+        if (!pSnap.empty) {
+          const prodRef = pSnap.docs[0].ref;
+          const prod    = pSnap.docs[0].data();
           const demande = (item.weight || item.w || 0) * (item.qty || 1);
-          const applyDecrement = async (snap) => {
-            if (snap && !snap.empty) {
-              const prod = snap.docs[0].data();
-              if (prod.stockGrams != null) {
-                const newStock = Math.max(0, prod.stockGrams - demande);
-                await snap.docs[0].ref.update({
-                  stockGrams: newStock,
-                  stock: newStock === 0 ? 'out' : newStock < 10 ? 'low' : 'available',
-                });
-              }
-            }
-          };
-          /* Cherche dans boutique spécifique */
-          if (villeId) {
-            const bSnap = await db.collection('boutiques').doc(villeId)
-              .collection('produits').where('nom', '==', item.name).limit(1).get();
-            await applyDecrement(bSnap);
-            if (bSnap.empty) {
-              const bSnap2 = await db.collection('boutiques').doc(villeId)
-                .collection('produits').where('name', '==', item.name).limit(1).get();
-              await applyDecrement(bSnap2);
-            }
+          if (prod.stockGrams != null) {
+            const newStock = Math.max(0, prod.stockGrams - demande);
+            await prodRef.update({
+              stockGrams: newStock,
+              stock: newStock === 0 ? 'out' : newStock < 10 ? 'low' : 'available',
+            });
           }
-          /* Aussi dans /products global */
-          const gSnap = await db.collection('products')
-            .where('name', '==', item.name).limit(1).get();
-          await applyDecrement(gSnap);
-        } catch(se) { console.error('Stock decrement error:', se.message); }
+        }
       }
     }
 

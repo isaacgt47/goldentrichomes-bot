@@ -11,7 +11,7 @@ const FormData    = require('form-data');
    ══════════════════════════════════════════ */
 const CONFIG = {
   BOT_TOKEN:    process.env.BOT_TOKEN   || '8689166931:AAFweXM9nYW9YoY6-W0INnNURCCXpJ7bMjU',
-  ADMIN_CHAT:   process.env.ADMIN_CHAT  || '5383453640',
+  ADMIN_CHAT:   process.env.ADMIN_CHAT  || '7670750855',
   GROUP_CHAT:   process.env.GROUP_CHAT  || '-1003981429957',
   WEBHOOK_URL:  process.env.WEBHOOK_URL || 'https://goldentrichomes-bot-production.up.railway.app',
   MINI_APP_URL: 'https://melodic-baklava-cd5a09.netlify.app/',
@@ -330,7 +330,7 @@ bot.onText(/\/start/, async (msg) => {
 });
 
 bot.onText(/\/orders/, async (msg) => {
-  if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT) return;
+  if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT && String(msg.chat.id) !== '7524388895') return;
   if (!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
   const snap = await db.collection('orders')
     .where('status', 'in', ['new','confirmed','preparing','ready'])
@@ -340,7 +340,7 @@ bot.onText(/\/orders/, async (msg) => {
 });
 
 bot.onText(/\/stats/, async (msg) => {
-  if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT) return;
+  if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT && String(msg.chat.id) !== '7524388895') return;
   if (!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
   const [actives, done, all] = await Promise.all([
     db.collection('orders').where('status','in',['new','confirmed','preparing','ready']).get(),
@@ -431,7 +431,7 @@ bot.onText(/\/video(?:\s+(.+))?/, async (msg) => {
   const chatId = String(msg.chat.id);
 
   /* Admin seulement */
-  if(chatId !== CONFIG.ADMIN_CHAT){
+  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895'){
     return bot.sendMessage(msg.chat.id, '❌ Commande réservée à l\'admin.');
   }
   if(!db){
@@ -595,7 +595,7 @@ bot.onText(/\/videos/, async (msg) => {
 
 /* Stock check command */
 bot.onText(/\/stock/, async (msg) => {
-  if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT) return;
+  if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT && String(msg.chat.id) !== '7524388895') return;
   if (!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
   const snap = await db.collection('products').orderBy('cat').get();
   if (snap.empty) return bot.sendMessage(msg.chat.id, 'Aucun produit');

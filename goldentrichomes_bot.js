@@ -95,6 +95,104 @@ const STATUTS = {
   cancelled: { label: '❌ Annulée',          emoji: '❌', next: null         },
 };
 
+/* ══════════════════════════════════════════
+   GESTION STOCK — Par boutique
+   ══════════════════════════════════════════ */
+
+/* Décrémente le stock d'une boutique quand commande confirmée */
+async function decrementStock(order){
+  if(!db) return;
+  const villeId = order.villeId || order.shop || order.boutiqueId;
+  if(!villeId){ console.warn('decrementStock: pas de villeId'); return; }
+
+  for(const item of (order.items||[])){
+    if(!item.name) continue;
+    try{
+      const demande = (item.weight||item.w||0) * (item.qty||1);
+      if(!demande) continue;
+
+      /* Cherche le produit dans la boutique */
+      const findProd = async (field) => {
+        const s = await db.collection('boutiques').doc(villeId)
+          .collection('produits').where(field,'==',item.name).limit(1).get();
+        return s.empty ? null : s.docs[0];
+      };
+
+      const prodDoc = await findProd('name') || await findProd('nom');
+      if(!prodDoc){ console.warn('decrementStock: produit non trouvé:', item.name); continue; }
+
+      const p = prodDoc.data();
+      if(p.stockGrams == null) continue; /* Stock infini → skip */
+
+      const newStock = Math.max(0, p.stockGrams - demande);
+      const newStatut = newStock === 0 ? 'out' : newStock < 10 ? 'low' : 'available';
+
+      await prodDoc.ref.update({
+        stockGrams: newStock,
+        stock:      newStatut,
+        updatedAt:  admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      console.log(`📦 Stock ${item.name} (${villeId}): ${p.stockGrams}g → ${newStock}g [${newStatut}]`);
+
+      /* Alerte si rupture ou stock bas */
+      if(newStatut === 'out'){
+        await bot.sendMessage(CONFIG.ADMIN_CHAT,
+          `🚨 *RUPTURE DE STOCK*\n\n` +
+          `❌ *${item.name}* est épuisé\n` +
+          `📍 Boutique : ${villeId}\n\n` +
+          `Réapprovisionne via le panel admin.`,
+          { parse_mode: 'Markdown' }
+        ).catch(()=>{});
+      } else if(newStatut === 'low'){
+        await bot.sendMessage(CONFIG.ADMIN_CHAT,
+          `⚠️ *Stock bas*\n\n` +
+          `📦 *${item.name}* — seulement *${newStock}g* restants\n` +
+          `📍 Boutique : ${villeId}`,
+          { parse_mode: 'Markdown' }
+        ).catch(()=>{});
+      }
+    }catch(e){ console.error('decrementStock item error:', e.message); }
+  }
+}
+
+/* Remet le stock en cas d'annulation */
+async function restoreStock(order){
+  if(!db) return;
+  const villeId = order.villeId || order.shop || order.boutiqueId;
+  if(!villeId) return;
+
+  for(const item of (order.items||[])){
+    if(!item.name) continue;
+    try{
+      const demande = (item.weight||item.w||0) * (item.qty||1);
+      if(!demande) continue;
+
+      const findProd = async (field) => {
+        const s = await db.collection('boutiques').doc(villeId)
+          .collection('produits').where(field,'==',item.name).limit(1).get();
+        return s.empty ? null : s.docs[0];
+      };
+
+      const prodDoc = await findProd('name') || await findProd('nom');
+      if(!prodDoc) continue;
+
+      const p = prodDoc.data();
+      if(p.stockGrams == null) continue;
+
+      const newStock = p.stockGrams + demande;
+      const newStatut = newStock === 0 ? 'out' : newStock < 10 ? 'low' : 'available';
+
+      await prodDoc.ref.update({
+        stockGrams: newStock,
+        stock:      newStatut,
+        updatedAt:  admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log(`♻️  Stock restauré ${item.name} (${villeId}): +${demande}g → ${newStock}g`);
+    }catch(e){ console.error('restoreStock item error:', e.message); }
+  }
+}
+
 function buildButtons(orderId, status) {
   const rows = [];
   const current = STATUTS[status] || STATUTS.new;
@@ -272,18 +370,40 @@ bot.on('callback_query', async (query) => {
         show_alert: false,
       });
 
-      /* Notif client */
+      /* ── Gestion stock selon le statut ── */
+      if(newStatus === 'confirmed' && !order.stockDecremented){
+        /* Décrémente le stock à la confirmation (pas à la commande) */
+        await decrementStock(order).catch(e => console.error('decrementStock:', e));
+        await db.collection('orders').doc(orderId).update({ stockDecremented: true }).catch(()=>{});
+      }
+      if(newStatus === 'cancelled' && order.stockDecremented){
+        /* Remet le stock si commande annulée après confirmation */
+        await restoreStock(order).catch(e => console.error('restoreStock:', e));
+        await db.collection('orders').doc(orderId).update({ stockDecremented: false }).catch(()=>{});
+      }
+
+      /* ── Notif client ── */
       if (order.clientChatId) {
-        const msgs = {
-          confirmed: `✅ Ta commande *${order.code}* a été confirmée !`,
+        const clientMsgs = {
+          confirmed: `✅ Ta commande *${order.code}* a été confirmée !\n🕐 Prépare-toi, on s\'en occupe.`,
           preparing: `👨‍🍳 Ta commande *${order.code}* est en préparation !`,
-          ready:     `📦 Ta commande *${order.code}* est prête ! Viens la récupérer.`,
+          ready:     `📦 Ta commande *${order.code}* est prête !\n🏪 Viens la récupérer à la boutique.`,
           delivered: `🚴 Ta commande *${order.code}* est en route !`,
-          paid:      `💰 Paiement reçu pour *${order.code}*. Merci !`,
-          cancelled: `❌ Ta commande *${order.code}* a été annulée.`,
+          paid:      `💰 Paiement reçu pour *${order.code}*. Merci ! 🙏`,
+          cancelled: `❌ Ta commande *${order.code}* a été annulée.\nContacte-nous si c\'est une erreur.`,
         };
-        const clientMsg = msgs[newStatus];
-        if (clientMsg) await bot.sendMessage(order.clientChatId, clientMsg, { parse_mode: 'HTML' }).catch(() => {});
+        const clientMsg = clientMsgs[newStatus];
+        if(clientMsg){
+          await bot.sendMessage(order.clientChatId, clientMsg, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [[{
+                text: '🛒 Retourner à la boutique',
+                web_app: { url: CONFIG.MINI_APP_URL }
+              }]]
+            }
+          }).catch(()=>{});
+        }
       }
     } catch(e) {
       console.error('status callback error:', e);
@@ -872,20 +992,98 @@ bot.onText(/\/clients/, async (msg) => {
   );
 });
 
-/* Stock check command */
-bot.onText(/\/stock/, async (msg) => {
-  if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT && String(msg.chat.id) !== '7524388895') return;
-  if (!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
-  const snap = await db.collection('products').orderBy('cat').get();
-  if (snap.empty) return bot.sendMessage(msg.chat.id, 'Aucun produit');
-  let text = `📦 *Stock GoldenTrichomes*\n━━━━━━━━━━━━━━━━\n`;
-  snap.docs.forEach(d => {
-    const p = d.data();
-    const stockG = p.stockGrams != null ? p.stockGrams : '∞';
-    const icon   = p.stockGrams === 0 ? '❌' : p.stockGrams < 10 ? '⚠️' : '✅';
-    text += `${icon} ${p.name} — *${stockG}g*\n`;
-  });
-  bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML' });
+/* ══════════════════════════════════════════
+   /stock — Stock par boutique
+   /stock [boutique] pour une boutique précise
+   ══════════════════════════════════════════ */
+bot.onText(/\/stock(?:\s+(.+))?/, async (msg) => {
+  if(String(msg.chat.id) !== CONFIG.ADMIN_CHAT && String(msg.chat.id) !== '7524388895') return;
+  if(!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
+
+  const filter = (msg.text.match(/\/stock\s+(.+)/)?.[1] || '').trim().toLowerCase();
+  const loadMsg = await bot.sendMessage(msg.chat.id, '⏳ Chargement du stock...');
+
+  try{
+    const boutSnap = await db.collection('boutiques').get();
+    const seenNoms = new Set();
+    let fullText = '📦 *Stock GoldenTrichomes*\n';
+
+    for(const boutDoc of boutSnap.docs){
+      const b = boutDoc.data();
+      if(b.actif === false) continue;
+      const nomBout = (b.nom || boutDoc.id).toLowerCase();
+      if(seenNoms.has(nomBout)) continue;
+      seenNoms.add(nomBout);
+
+      /* Filtre par boutique si spécifié */
+      if(filter && !nomBout.includes(filter)) continue;
+
+      const prodsSnap = await boutDoc.ref.collection('produits')
+        .orderBy('cat').get();
+      if(prodsSnap.empty) continue;
+
+      fullText += `\n🏪 *${b.nom || boutDoc.id}*\n${'─'.repeat(20)}\n`;
+
+      let outOfStock = [];
+      let lowStock   = [];
+      let inStock    = [];
+
+      prodsSnap.docs.forEach(d => {
+        const p = d.data();
+        const g = p.stockGrams;
+        const name = p.name || p.nom || '?';
+        const prix = p.price ? ` — ${p.price} MAD/g` : '';
+        if(g === 0 || p.stock === 'out'){
+          outOfStock.push(`❌ ${name}${prix}`);
+        } else if(g != null && g < 10 || p.stock === 'low'){
+          lowStock.push(`⚠️ ${name} — *${g}g restants*${prix}`);
+        } else {
+          const gStr = g != null ? ` — ${g}g` : '';
+          inStock.push(`✅ ${name}${gStr}${prix}`);
+        }
+      });
+
+      if(outOfStock.length) fullText += outOfStock.map(l=>`  ${l}`).join('\n') + '\n';
+      if(lowStock.length)   fullText += lowStock.map(l=>`  ${l}`).join('\n') + '\n';
+      if(inStock.length)    fullText += inStock.map(l=>`  ${l}`).join('\n') + '\n';
+    }
+
+    /* Alerte ruptures */
+    const boutiques2 = boutSnap.docs.filter(d=>d.data().actif!==false);
+    let alertText = '';
+    for(const boutDoc of boutiques2){
+      const b = boutDoc.data();
+      const nomBout = (b.nom||boutDoc.id).toLowerCase();
+      const prodsSnap = await boutDoc.ref.collection('produits').get();
+      prodsSnap.docs.forEach(d=>{
+        const p = d.data();
+        if(p.stock==='out'||p.stockGrams===0){
+          alertText += `  ❌ ${p.name||p.nom} (${b.nom||boutDoc.id})\n`;
+        }
+      });
+    }
+
+    if(alertText){
+      fullText += `\n🚨 *RUPTURES DE STOCK :*\n${alertText}`;
+      fullText += `\nUtilise le panel admin pour réapprovisionner.`;
+    }
+
+    /* Telegram limite à 4096 chars */
+    if(fullText.length > 4000){
+      fullText = fullText.slice(0, 3900) + '\n\n... (tronqué — utilise /stock [ville])';
+    }
+
+    await bot.editMessageText(fullText, {
+      chat_id:    msg.chat.id,
+      message_id: loadMsg.message_id,
+      parse_mode: 'Markdown',
+    });
+  }catch(e){
+    console.error('stock error:', e);
+    await bot.editMessageText('❌ Erreur stock : ' + e.message, {
+      chat_id: msg.chat.id, message_id: loadMsg.message_id
+    });
+  }
 });
 
 /* ══════════════════════════════════════════
@@ -963,40 +1161,9 @@ app.post('/order', async (req, res) => {
       const ref = await db.collection('orders').add(order);
       orderId   = ref.id;
 
-      /* ── Décrémente le stock dans boutiques ET global ── */
-      for (const item of (order.items || [])) {
-        if (!item.name) continue;
-        try {
-          const demande = (item.weight || item.w || 0) * (item.qty || 1);
-          const applyDecrement = async (snap) => {
-            if (snap && !snap.empty) {
-              const prod = snap.docs[0].data();
-              if (prod.stockGrams != null) {
-                const newStock = Math.max(0, prod.stockGrams - demande);
-                await snap.docs[0].ref.update({
-                  stockGrams: newStock,
-                  stock: newStock === 0 ? 'out' : newStock < 10 ? 'low' : 'available',
-                });
-              }
-            }
-          };
-          /* Cherche dans boutique spécifique */
-          if (villeId) {
-            const bSnap = await db.collection('boutiques').doc(villeId)
-              .collection('produits').where('nom', '==', item.name).limit(1).get();
-            await applyDecrement(bSnap);
-            if (bSnap.empty) {
-              const bSnap2 = await db.collection('boutiques').doc(villeId)
-                .collection('produits').where('name', '==', item.name).limit(1).get();
-              await applyDecrement(bSnap2);
-            }
-          }
-          /* Aussi dans /products global */
-          const gSnap = await db.collection('products')
-            .where('name', '==', item.name).limit(1).get();
-          await applyDecrement(gSnap);
-        } catch(se) { console.error('Stock decrement error:', se.message); }
-      }
+      /* ── Stock : décrémenté à la CONFIRMATION (pas ici) ── */
+      /* Le décrement se fait dans callback_query quand status → confirmed */
+      order.stockDecremented = false;
     }
 
     /* ── Envoie au groupe avec boutons ── */

@@ -366,9 +366,9 @@ bot.onText(/\/stats/, async (msg) => {
    UPLOAD VIDÉO — Cloudinary
    ══════════════════════════════════════════ */
 
-/* Télécharge un fichier Telegram puis l'upload sur Cloudinary */
+/* Télécharge un fichier Telegram puis l\'upload sur Cloudinary */
 async function uploadVideoFromTelegram(fileId, filename){
-  /* 1. Récupère l'URL de téléchargement Telegram */
+  /* 1. Récupère l\'URL de téléchargement Telegram */
   const fileInfo = await bot.getFile(fileId);
   const fileUrl  = `https://api.telegram.org/file/bot${CONFIG.BOT_TOKEN}/${fileInfo.file_path}`;
 
@@ -432,7 +432,7 @@ bot.onText(/\/video(?:\s+(.+))?/, async (msg) => {
 
   /* Admin seulement */
   if(chatId !== CONFIG.ADMIN_CHAT){
-    return bot.sendMessage(msg.chat.id, '❌ Commande réservée à l'admin.');
+    return bot.sendMessage(msg.chat.id, '❌ Commande réservée à l\'admin.');
   }
   if(!db){
     return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté.');
@@ -440,7 +440,7 @@ bot.onText(/\/video(?:\s+(.+))?/, async (msg) => {
   if(!CLOUDINARY.CLOUD || CLOUDINARY.CLOUD === 'VOTRE_CLOUD_NAME'){
     return bot.sendMessage(msg.chat.id,
       '⚙️ *Cloudinary non configuré*\n\n' +
-      'Sur Railway, ajoute ces variables d'environnement :\n' +
+      'Sur Railway, ajoute ces variables d\'environnement :\n' +
       '`CLOUDINARY_CLOUD` = ton Cloud Name\n' +
       '`CLOUDINARY_PRESET` = ton Upload Preset (unsigned)\n\n' +
       'Crée un compte gratuit sur cloudinary.com',
@@ -515,7 +515,7 @@ async function handleVideoUpload(msg, fileId, filename){
 
   if(!pending){
     return bot.sendMessage(msg.chat.id,
-      '⚠️ Envoie d'abord `/video nom_du_produit` pour associer la vidéo.',
+      '⚠️ Envoie d\'abord `/video nom_du_produit` pour associer la vidéo.',
       { parse_mode: 'Markdown' }
     );
   }
@@ -538,7 +538,7 @@ async function handleVideoUpload(msg, fileId, filename){
       { chat_id: msg.chat.id, message_id: uploadMsg.message_id }
     );
 
-    /* Sauvegarde l'URL dans Firestore sur le produit */
+    /* Sauvegarde l\'URL dans Firestore sur le produit */
     await pending.produitRef.update({
       videoURL:  videoUrl,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -551,7 +551,7 @@ async function handleVideoUpload(msg, fileId, filename){
       `✅ *Vidéo uploadée avec succès !*\n\n` +
       `📦 Produit : *${pending.produitNom}*\n` +
       `🔗 URL : ${videoUrl}\n\n` +
-      `La vidéo s'affiche maintenant dans la mini app sur la fiche produit.`,
+      `La vidéo s\'affiche maintenant dans la mini app sur la fiche produit.`,
       { chat_id: msg.chat.id, message_id: uploadMsg.message_id, parse_mode: 'Markdown' }
     );
 
@@ -588,7 +588,7 @@ bot.onText(/\/videos/, async (msg) => {
     });
   }
 
-  if(!count) text += 'Aucun produit avec vidéo pour l'instant.';
+  if(!count) text += 'Aucun produit avec vidéo pour l\'instant.';
   text += `\n\n📊 Total : ${count} produit(s) avec vidéo`;
   bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
 });

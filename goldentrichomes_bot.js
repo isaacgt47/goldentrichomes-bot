@@ -541,6 +541,23 @@ bot.onText(/\/stats/, async (msg) => {
       allOrders.docs.map(d => d.data().clientChatId || d.data().telegramId).filter(Boolean)
     ).size;
 
+    /* Nouveaux clients aujourd'hui / cette semaine */
+    const clientsToday = allClients.docs.filter(d => {
+      const t = d.data().createdAt?.toDate ? d.data().createdAt.toDate()
+              : d.data().lastSeen?.toDate  ? d.data().lastSeen.toDate() : null;
+      return t && t >= today;
+    }).length;
+    const clientsWeek = allClients.docs.filter(d => {
+      const t = d.data().createdAt?.toDate ? d.data().createdAt.toDate()
+              : d.data().lastSeen?.toDate  ? d.data().lastSeen.toDate() : null;
+      return t && t >= weekAgo;
+    }).length;
+    /* Actifs cette semaine (ont ouvert le bot) */
+    const clientsActiveWeek = allClients.docs.filter(d => {
+      const t = d.data().lastSeen?.toDate ? d.data().lastSeen.toDate() : null;
+      return t && t >= weekAgo;
+    }).length;
+
     /* Top produits */
     const prodCount = {};
     allOrders.docs.forEach(d => {
@@ -571,6 +588,9 @@ bot.onText(/\/stats/, async (msg) => {
       '━━━━━━━━━━━━━━━━━━━━\n\n' +
       '👥 *Utilisateurs*\n' +
       `  📱 Total inscrits : *${allClients.size}*\n` +
+      `  🆕 Aujourd\'hui : *${clientsToday}*\n` +
+      `  📅 Cette semaine : *${clientsWeek}*\n` +
+      `  🔥 Actifs 7j : *${clientsActiveWeek}*\n` +
       `  🛒 Ont commandé : *${clientsWithOrders}*\n\n` +
       '📦 *Commandes*\n' +
       `  📅 Aujourd\'hui : *${ordersToday}*\n` +
@@ -993,6 +1013,67 @@ bot.onText(/\/clients/, async (msg) => {
 });
 
 /* ══════════════════════════════════════════
+   /cleanstock — Nettoie les doublons produits
+   Garde le produit avec le + grand stock
+   ══════════════════════════════════════════ */
+bot.onText(/\/cleanstock(?:\s+(.+))?/, async (msg) => {
+  const chatId = String(msg.chat.id);
+  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
+  if(!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
+
+  const boutFilter = (msg.text.match(/\/cleanstock\s+(.+)/)?.[1] || '').trim().toLowerCase();
+  const statusMsg = await bot.sendMessage(msg.chat.id, '🧹 Nettoyage des doublons en cours...');
+
+  let totalSupp = 0;
+  const boutSnap = await db.collection('boutiques').get();
+
+  for(const boutDoc of boutSnap.docs){
+    const b = boutDoc.data();
+    const nomBout = (b.nom || boutDoc.id).toLowerCase();
+    if(boutFilter && !nomBout.includes(boutFilter)) continue;
+
+    const prodsSnap = await boutDoc.ref.collection('produits').get();
+    /* Groupe par nom */
+    const byName = {};
+    prodsSnap.docs.forEach(d => {
+      const p = d.data();
+      const name = (p.name || p.nom || '').toLowerCase().trim();
+      if(!name) return;
+      if(!byName[name]) byName[name] = [];
+      byName[name].push({ ref: d.ref, data: p });
+    });
+
+    /* Pour chaque nom, garde le meilleur, supprime les autres */
+    for(const [name, docs] of Object.entries(byName)){
+      if(docs.length <= 1) continue;
+
+      /* Garde celui avec le + grand stock ou le + récent */
+      docs.sort((a,b) => {
+        const gA = a.data.stockGrams ?? -1;
+        const gB = b.data.stockGrams ?? -1;
+        if(gB !== gA) return gB - gA;
+        const tA = a.data.updatedAt?.toMillis ? a.data.updatedAt.toMillis() : 0;
+        const tB = b.data.updatedAt?.toMillis ? b.data.updatedAt.toMillis() : 0;
+        return tB - tA;
+      });
+
+      /* Supprime tous sauf le premier */
+      for(let i = 1; i < docs.length; i++){
+        await docs[i].ref.delete();
+        totalSupp++;
+      }
+    }
+  }
+
+  await bot.editMessageText(
+    `✅ *Nettoyage terminé !*\n\n` +
+    `🗑️ *${totalSupp}* doublon(s) supprimé(s)\n\n` +
+    `Relance /stock pour voir le résultat.`,
+    { chat_id: msg.chat.id, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
+  );
+});
+
+/* ══════════════════════════════════════════
    /stock — Stock par boutique
    /stock [boutique] pour une boutique précise
    ══════════════════════════════════════════ */
@@ -1028,14 +1109,20 @@ bot.onText(/\/stock(?:\s+(.+))?/, async (msg) => {
       let lowStock   = [];
       let inStock    = [];
 
+      /* Déduplique par nom dans la même boutique */
+      const seenProds = new Set();
       prodsSnap.docs.forEach(d => {
         const p = d.data();
-        const g = p.stockGrams;
         const name = p.name || p.nom || '?';
+        /* Skip doublons */
+        if(seenProds.has(name.toLowerCase())) return;
+        seenProds.add(name.toLowerCase());
+
+        const g = p.stockGrams;
         const prix = p.price ? ` — ${p.price} MAD/g` : '';
         if(g === 0 || p.stock === 'out'){
           outOfStock.push(`❌ ${name}${prix}`);
-        } else if(g != null && g < 10 || p.stock === 'low'){
+        } else if((g != null && g < 10) || p.stock === 'low'){
           lowStock.push(`⚠️ ${name} — *${g}g restants*${prix}`);
         } else {
           const gStr = g != null ? ` — ${g}g` : '';

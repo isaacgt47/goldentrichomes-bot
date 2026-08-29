@@ -3,6 +3,8 @@ const express     = require('express');
 const TelegramBot = require('node-telegram-bot-api').default || require('node-telegram-bot-api');
 const admin       = require('firebase-admin');
 const axios       = require('axios');
+const https       = require('https');
+const FormData    = require('form-data');
 
 /* ══════════════════════════════════════════
    CONFIG
@@ -10,11 +12,7 @@ const axios       = require('axios');
 const CONFIG = {
   BOT_TOKEN:    process.env.BOT_TOKEN   || '8689166931:AAFweXM9nYW9YoY6-W0INnNURCCXpJ7bMjU',
   ADMIN_CHAT:   process.env.ADMIN_CHAT  || '5383453640',
-  GROUP_CHAT:   process.env.GROUP_CHAT  || '-1003981429957',  /* groupe général */
-  CITY_GROUPS: {
-    casablanca: process.env.GROUP_CASA  || '-1004491131884',
-    rabat:      process.env.GROUP_RABAT || '-1003994458019',
-  },
+  GROUP_CHAT:   process.env.GROUP_CHAT  || '-1003981429957',
   WEBHOOK_URL:  process.env.WEBHOOK_URL || 'https://goldentrichomes-bot-production.up.railway.app',
   MINI_APP_URL: 'https://melodic-baklava-cd5a09.netlify.app/',
   PORT:         process.env.PORT        || 3000,
@@ -26,6 +24,18 @@ const CONFIG = {
     SOL:        '45hP6dSNnNxP3at3seQ1pjwPoLXujneTvCoutbecFnpw',
   },
 };
+
+/* ══════════════════════════════════════════
+   CLOUDINARY CONFIG
+   Upload vidéo depuis Telegram → Cloudinary
+   ══════════════════════════════════════════ */
+const CLOUDINARY = {
+  CLOUD:  process.env.CLOUDINARY_CLOUD  || 'prxyoco2',
+  PRESET: process.env.CLOUDINARY_PRESET || 'gt_videos',
+};
+
+/* État temporaire des commandes vidéo en cours */
+const pendingVideoUpload = {}; /* chatId → { produitId, boutique } */
 
 /* Anti-doublon — garde en mémoire les orderId déjà envoyés */
 const sentOrders = new Set();
@@ -152,52 +162,34 @@ function payLabel(p) {
    ENVOYER UNE COMMANDE AU GROUPE
    ══════════════════════════════════════════ */
 async function sendOrderToGroup(orderId, order) {
-  /* Anti-doublon */
+  /* Anti-doublon — ignore si déjà envoyé */
   if (sentOrders.has(orderId)) {
     console.log(`⏭️  Doublon ignoré: ${orderId}`);
     return;
   }
   sentOrders.add(orderId);
+  /* Nettoie après 1h pour éviter les fuites mémoire */
   setTimeout(() => sentOrders.delete(orderId), 3600000);
 
   const text    = buildOrderText(order, orderId);
   const buttons = buildButtons(orderId, order.status || 'new');
-
-  /* Détermine les groupes destinataires */
-  const villeId = (order.villeId || order.shop || '').toLowerCase();
-  const groups  = [CONFIG.GROUP_CHAT]; /* toujours le groupe général */
-
-  /* Ajoute le groupe ville si configuré */
-  const cityGroup = CONFIG.CITY_GROUPS[villeId] || order.groupTgId || null;
-  if (cityGroup && cityGroup !== CONFIG.GROUP_CHAT) {
-    groups.push(cityGroup);
-  }
-
-  console.log(`📨 Envoi commande ${orderId} aux groupes:`, groups, '| Ville:', villeId);
-
-  let firstMsg = null;
-  for (const chatId of groups) {
-    try {
-      const msg = await bot.sendMessage(chatId, text, {
-        parse_mode:   'HTML',
-        reply_markup: buttons,
-      });
-      if (!firstMsg) firstMsg = msg;
-    } catch(e) {
-      console.error(`sendOrderToGroup error [${chatId}]:`, e.message);
+  try {
+    const msg = await bot.sendMessage(CONFIG.GROUP_CHAT, text, {
+      parse_mode:   'HTML',
+      reply_markup: buttons,
+    });
+    /* Sauvegarde le message_id pour éviter les doublons */
+    if (db) {
+      await db.collection('orders').doc(orderId).update({
+        groupMsgId:  msg.message_id,
+        groupChatId: CONFIG.GROUP_CHAT,
+        sentToGroup: true,
+      }).catch(() => {});
     }
+    return msg;
+  } catch(e) {
+    console.error('sendOrderToGroup error:', e.message);
   }
-
-  /* Sauvegarde le message_id du groupe général */
-  if (db && firstMsg) {
-    await db.collection('orders').doc(orderId).update({
-      groupMsgId:   firstMsg.message_id,
-      groupChatId:  CONFIG.GROUP_CHAT,
-      cityGroupId:  cityGroup || null,
-      sentToGroup:  true,
-    }).catch(() => {});
-  }
-  return firstMsg;
 }
 
 /* ══════════════════════════════════════════
@@ -358,9 +350,247 @@ bot.onText(/\/stats/, async (msg) => {
   const revenue = done.docs.reduce((s,d) => s+(d.data().totalMAD||d.data().total||0), 0);
   bot.sendMessage(msg.chat.id,
     `📊 *Stats GoldenTrichomes*\n\n` +
-    `🔄 En cours : ${actives.size}\n✅ Livrées : ${done.size}\n📦 Total : ${all.size}\n💰 Revenus : ${revenue.toLocaleString('fr-MA')} MAD`,
-    { parse_mode: 'HTML' }
+    `🔄 En cours : ${actives.size}\n` +
+    `✅ Livrées : ${done.size}\n` +
+    `📦 Total : ${all.size}\n` +
+    `💰 Revenus : ${revenue.toLocaleString('fr-MA')} MAD\n\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    `📹 *Commandes vidéo admin :*\n` +
+    `/video [nom] → Uploader une vidéo produit\n` +
+    `/videos → Lister les produits avec vidéo`,
+    { parse_mode: 'Markdown' }
   );
+});
+
+/* ══════════════════════════════════════════
+   UPLOAD VIDÉO — Cloudinary
+   ══════════════════════════════════════════ */
+
+/* Télécharge un fichier Telegram puis l'upload sur Cloudinary */
+async function uploadVideoFromTelegram(fileId, filename){
+  /* 1. Récupère l'URL de téléchargement Telegram */
+  const fileInfo = await bot.getFile(fileId);
+  const fileUrl  = `https://api.telegram.org/file/bot${CONFIG.BOT_TOKEN}/${fileInfo.file_path}`;
+
+  /* 2. Télécharge le fichier */
+  const response = await axios.get(fileUrl, { responseType: 'stream', timeout: 120000 });
+  const stream   = response.data;
+
+  /* 3. Upload sur Cloudinary via multipart */
+  const form = new FormData();
+  form.append('file',           stream, { filename: filename || 'video.mp4' });
+  form.append('upload_preset',  CLOUDINARY.PRESET);
+  form.append('resource_type',  'video');
+  form.append('folder',         'goldentrichomes');
+
+  const uploadRes = await axios.post(
+    `https://api.cloudinary.com/v1_1/${CLOUDINARY.CLOUD}/video/upload`,
+    form,
+    { headers: form.getHeaders(), timeout: 300000 }
+  );
+
+  return uploadRes.data.secure_url; /* URL directe MP4 permanente */
+}
+
+/* Trouve un produit par nom dans toutes les boutiques */
+async function findProduitByName(search){
+  if(!db) return null;
+  search = search.toLowerCase().trim();
+
+  /* Cherche dans toutes les boutiques */
+  const boutSnap = await db.collection('boutiques').get();
+  for(const boutDoc of boutSnap.docs){
+    const prodsSnap = await boutDoc.ref.collection('produits').get();
+    for(const prodDoc of prodsSnap.docs){
+      const p = prodDoc.data();
+      const name = (p.name || p.nom || '').toLowerCase();
+      if(name.includes(search) || search.includes(name.split(' ')[0].toLowerCase())){
+        return { ref: prodDoc.ref, data: p, id: prodDoc.id, boutique: boutDoc.id };
+      }
+    }
+  }
+
+  /* Cherche aussi dans /products global */
+  const globalSnap = await db.collection('products').get();
+  for(const doc of globalSnap.docs){
+    const p = doc.data();
+    const name = (p.name || '').toLowerCase();
+    if(name.includes(search)){
+      return { ref: doc.ref, data: p, id: doc.id, boutique: 'global' };
+    }
+  }
+  return null;
+}
+
+/* ══════════════════════════════════════════
+   COMMANDE /video — Admin seulement
+   Usage: /video nom_du_produit
+   Puis envoyer la vidéo dans le chat
+   ══════════════════════════════════════════ */
+bot.onText(/\/video(?:\s+(.+))?/, async (msg) => {
+  const chatId = String(msg.chat.id);
+
+  /* Admin seulement */
+  if(chatId !== CONFIG.ADMIN_CHAT){
+    return bot.sendMessage(msg.chat.id, '❌ Commande réservée à l'admin.');
+  }
+  if(!db){
+    return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté.');
+  }
+  if(!CLOUDINARY.CLOUD || CLOUDINARY.CLOUD === 'VOTRE_CLOUD_NAME'){
+    return bot.sendMessage(msg.chat.id,
+      '⚙️ *Cloudinary non configuré*\n\n' +
+      'Sur Railway, ajoute ces variables d'environnement :\n' +
+      '`CLOUDINARY_CLOUD` = ton Cloud Name\n' +
+      '`CLOUDINARY_PRESET` = ton Upload Preset (unsigned)\n\n' +
+      'Crée un compte gratuit sur cloudinary.com',
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  const nomProduit = (msg.text.match(/\/video\s+(.+)/)?.[1] || '').trim();
+
+  if(!nomProduit){
+    return bot.sendMessage(msg.chat.id,
+      '📹 *Commande vidéo produit*\n\n' +
+      'Usage : `/video nom_du_produit`\n\n' +
+      'Exemples :\n' +
+      '`/video Forbidden Fruit 120u`\n' +
+      '`/video Rainbow Belt`\n' +
+      '`/video Tekmache`\n\n' +
+      'Après la commande, envoie la vidéo directement ici.',
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  /* Cherche le produit */
+  const statusMsg = await bot.sendMessage(msg.chat.id, `🔍 Recherche *${nomProduit}*...`, { parse_mode: 'Markdown' });
+
+  const produit = await findProduitByName(nomProduit);
+  if(!produit){
+    return bot.editMessageText(
+      `❌ Produit *${nomProduit}* introuvable.\n\nVérifie le nom exact dans le panel admin.`,
+      { chat_id: msg.chat.id, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
+    );
+  }
+
+  /* Sauvegarde en attente */
+  pendingVideoUpload[chatId] = {
+    produitRef: produit.ref,
+    produitNom: produit.data.name || produit.data.nom || nomProduit,
+    boutique:   produit.boutique,
+    msgId:      statusMsg.message_id,
+  };
+
+  await bot.editMessageText(
+    `✅ Produit trouvé : *${produit.data.name || produit.data.nom}*\n` +
+    `📍 Boutique : ${produit.boutique}\n\n` +
+    `📹 *Envoie maintenant ta vidéo* (MOV, MP4...)\n` +
+    `L'upload démarre automatiquement.`,
+    { chat_id: msg.chat.id, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
+  );
+});
+
+/* ══════════════════════════════════════════
+   RÉCEPTION VIDÉO — Après /video
+   ══════════════════════════════════════════ */
+bot.on('video', async (msg) => {
+  const chatId = String(msg.chat.id);
+  if(chatId !== CONFIG.ADMIN_CHAT) return;
+  await handleVideoUpload(msg, msg.video.file_id, msg.video.file_name || 'video.mp4');
+});
+
+bot.on('document', async (msg) => {
+  const chatId = String(msg.chat.id);
+  if(chatId !== CONFIG.ADMIN_CHAT) return;
+  /* Accepte les documents vidéo (MOV, MP4 envoyés comme fichier) */
+  const mime = msg.document?.mime_type || '';
+  if(!mime.startsWith('video/')) return;
+  await handleVideoUpload(msg, msg.document.file_id, msg.document.file_name || 'video.mp4');
+});
+
+async function handleVideoUpload(msg, fileId, filename){
+  const chatId  = String(msg.chat.id);
+  const pending = pendingVideoUpload[chatId];
+
+  if(!pending){
+    return bot.sendMessage(msg.chat.id,
+      '⚠️ Envoie d'abord `/video nom_du_produit` pour associer la vidéo.',
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  const uploadMsg = await bot.sendMessage(msg.chat.id,
+    '⏳ Upload en cours...\n0% — Téléchargement depuis Telegram'
+  );
+
+  try{
+    /* Progression */
+    await bot.editMessageText(
+      '⏳ Upload en cours...\n30% — Téléchargement vidéo',
+      { chat_id: msg.chat.id, message_id: uploadMsg.message_id }
+    );
+
+    const videoUrl = await uploadVideoFromTelegram(fileId, filename);
+
+    await bot.editMessageText(
+      '⏳ Upload en cours...\n85% — Sauvegarde Firestore',
+      { chat_id: msg.chat.id, message_id: uploadMsg.message_id }
+    );
+
+    /* Sauvegarde l'URL dans Firestore sur le produit */
+    await pending.produitRef.update({
+      videoURL:  videoUrl,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    /* Nettoie l'état en attente */
+    delete pendingVideoUpload[chatId];
+
+    await bot.editMessageText(
+      `✅ *Vidéo uploadée avec succès !*\n\n` +
+      `📦 Produit : *${pending.produitNom}*\n` +
+      `🔗 URL : ${videoUrl}\n\n` +
+      `La vidéo s'affiche maintenant dans la mini app sur la fiche produit.`,
+      { chat_id: msg.chat.id, message_id: uploadMsg.message_id, parse_mode: 'Markdown' }
+    );
+
+  }catch(err){
+    console.error('handleVideoUpload error:', err.message);
+    delete pendingVideoUpload[chatId];
+    await bot.editMessageText(
+      `❌ *Upload échoué*\n\n${err.message}\n\nRéessaie avec /video ${pending.produitNom}`,
+      { chat_id: msg.chat.id, message_id: uploadMsg.message_id, parse_mode: 'Markdown' }
+    );
+  }
+}
+
+/* ══════════════════════════════════════════
+   COMMANDE /videos — Liste les produits avec vidéo
+   ══════════════════════════════════════════ */
+bot.onText(/\/videos/, async (msg) => {
+  if(String(msg.chat.id) !== CONFIG.ADMIN_CHAT) return;
+  if(!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
+
+  const boutSnap = await db.collection('boutiques').get();
+  let text = '🎬 *Produits avec vidéo :*\n\n';
+  let count = 0;
+
+  for(const boutDoc of boutSnap.docs){
+    const prodsSnap = await boutDoc.ref.collection('produits')
+      .where('videoURL', '!=', null).get();
+    prodsSnap.docs.forEach(d => {
+      const p = d.data();
+      if(p.videoURL){
+        text += `✅ ${p.name || p.nom} (${boutDoc.id})\n`;
+        count++;
+      }
+    });
+  }
+
+  if(!count) text += 'Aucun produit avec vidéo pour l'instant.';
+  text += `\n\n📊 Total : ${count} produit(s) avec vidéo`;
+  bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
 });
 
 /* Stock check command */
@@ -397,24 +627,47 @@ app.post('/order', async (req, res) => {
     }
 
     /* ── Vérification stock en grammes ── */
+    const villeId = order.villeId || order.shop || null;
     if (db && order.items?.length) {
       for (const item of order.items) {
         if (!item.name) continue;
-        /* Cherche le produit par nom */
-        const pSnap = await db.collection('products')
-          .where('name', '==', item.name).limit(1).get();
-        if (!pSnap.empty) {
-          const prod    = pSnap.docs[0].data();
-          const prodId  = pSnap.docs[0].id;
-          const demande = (item.weight || item.w || 0) * (item.qty || 1);
-          if (prod.stockGrams != null && prod.stockGrams < demande) {
-            return res.status(400).json({
-              error: `Stock insuffisant pour ${item.name}. Disponible : ${prod.stockGrams}g`,
-              stockError: true,
-              product: item.name,
-              available: prod.stockGrams,
-            });
+        try {
+          let snap = null;
+          /* 1. Cherche dans /boutiques/{villeId}/produits par nom */
+          if (villeId) {
+            const bSnap = await db.collection('boutiques').doc(villeId)
+              .collection('produits').where('nom', '==', item.name).limit(1).get();
+            if (!bSnap.empty) snap = bSnap;
           }
+          /* 2. Cherche dans /boutiques/{villeId}/produits par name */
+          if ((!snap || snap.empty) && villeId) {
+            const bSnap2 = await db.collection('boutiques').doc(villeId)
+              .collection('produits').where('name', '==', item.name).limit(1).get();
+            if (!bSnap2.empty) snap = bSnap2;
+          }
+          /* 3. Fallback: /products global */
+          if (!snap || snap.empty) {
+            const gSnap = await db.collection('products')
+              .where('name', '==', item.name).limit(1).get();
+            if (!gSnap.empty) snap = gSnap;
+          }
+          /* Vérifie le stock seulement si produit trouvé */
+          if (snap && !snap.empty) {
+            const prod    = snap.docs[0].data();
+            const demande = (item.weight || item.w || 0) * (item.qty || 1);
+            if (prod.stockGrams != null && prod.stockGrams < demande) {
+              return res.status(400).json({
+                error: `Stock insuffisant pour ${item.name}. Disponible : ${prod.stockGrams}g`,
+                stockError: true,
+                product: item.name,
+                available: prod.stockGrams,
+              });
+            }
+          }
+          /* Si produit non trouvé → on laisse passer (pas de blocage) */
+        } catch(se) {
+          console.error('Stock check error:', se.message);
+          /* En cas d'erreur → on laisse passer */
         }
       }
     }
@@ -431,23 +684,39 @@ app.post('/order', async (req, res) => {
       const ref = await db.collection('orders').add(order);
       orderId   = ref.id;
 
-      /* ── Décrémente le stock ── */
+      /* ── Décrémente le stock dans boutiques ET global ── */
       for (const item of (order.items || [])) {
         if (!item.name) continue;
-        const pSnap = await db.collection('products')
-          .where('name', '==', item.name).limit(1).get();
-        if (!pSnap.empty) {
-          const prodRef = pSnap.docs[0].ref;
-          const prod    = pSnap.docs[0].data();
+        try {
           const demande = (item.weight || item.w || 0) * (item.qty || 1);
-          if (prod.stockGrams != null) {
-            const newStock = Math.max(0, prod.stockGrams - demande);
-            await prodRef.update({
-              stockGrams: newStock,
-              stock: newStock === 0 ? 'out' : newStock < 10 ? 'low' : 'available',
-            });
+          const applyDecrement = async (snap) => {
+            if (snap && !snap.empty) {
+              const prod = snap.docs[0].data();
+              if (prod.stockGrams != null) {
+                const newStock = Math.max(0, prod.stockGrams - demande);
+                await snap.docs[0].ref.update({
+                  stockGrams: newStock,
+                  stock: newStock === 0 ? 'out' : newStock < 10 ? 'low' : 'available',
+                });
+              }
+            }
+          };
+          /* Cherche dans boutique spécifique */
+          if (villeId) {
+            const bSnap = await db.collection('boutiques').doc(villeId)
+              .collection('produits').where('nom', '==', item.name).limit(1).get();
+            await applyDecrement(bSnap);
+            if (bSnap.empty) {
+              const bSnap2 = await db.collection('boutiques').doc(villeId)
+                .collection('produits').where('name', '==', item.name).limit(1).get();
+              await applyDecrement(bSnap2);
+            }
           }
-        }
+          /* Aussi dans /products global */
+          const gSnap = await db.collection('products')
+            .where('name', '==', item.name).limit(1).get();
+          await applyDecrement(gSnap);
+        } catch(se) { console.error('Stock decrement error:', se.message); }
       }
     }
 

@@ -198,6 +198,42 @@ async function sendOrderToGroup(orderId, order) {
 bot.on('callback_query', async (query) => {
   const parts   = query.data.split(':');
   const action  = parts[0];
+
+  /* ── Choix boutique pour upload vidéo ── */
+  if(action === 'vidvill'){
+    const adminId    = parts[1];
+    const boutiqueId = parts[2];
+    const pending    = pendingVideoUpload[adminId];
+    if(!pending || pending.step !== 'choose_boutique'){
+      return bot.answerCallbackQuery(query.id, { text: '❌ Session expirée. Relance /video' });
+    }
+    const { resultats, nomProduit, statusMsgId } = pending;
+    let choix, boutLabel;
+    if(boutiqueId === 'ALL'){
+      choix = resultats;
+      boutLabel = 'toutes les boutiques (' + resultats.length + ')';
+    } else {
+      choix = resultats.filter(r => r.boutiqueId === boutiqueId);
+      boutLabel = choix[0]?.boutiqueNom || boutiqueId;
+    }
+    if(!choix.length) return bot.answerCallbackQuery(query.id, { text: '❌ Introuvable' });
+
+    pendingVideoUpload[adminId] = {
+      allRefs:    choix.map(r => r.ref),
+      produitNom: choix[0].data.name || choix[0].data.nom || nomProduit,
+      boutique:   boutLabel,
+    };
+    await bot.answerCallbackQuery(query.id, { text: '✅ ' + boutLabel + ' sélectionnée' });
+    await bot.editMessageText(
+      '✅ *' + nomProduit + '*\n' +
+      '📍 Boutique : *' + boutLabel + '*\n\n' +
+      '📹 Envoie maintenant ta vidéo (MOV, MP4...)\n' +
+      "L\'upload démarre automatiquement.",
+      { chat_id: query.message.chat.id, message_id: statusMsgId, parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
   const orderId = parts[1];
   const newStatus = parts[2];
   const employeeName = query.from.first_name || query.from.username || 'Employé';
@@ -392,102 +428,112 @@ async function uploadVideoFromTelegram(fileId, filename){
   return uploadRes.data.secure_url; /* URL directe MP4 permanente */
 }
 
-/* Trouve un produit par nom dans toutes les boutiques */
-async function findProduitByName(search){
-  if(!db) return null;
+/* Cherche un produit dans TOUTES les boutiques actives — retourne liste */
+async function findProduitDansBoutiques(search){
+  if(!db) return [];
   search = search.toLowerCase().trim();
+  const results = [];
 
-  /* Cherche dans toutes les boutiques */
   const boutSnap = await db.collection('boutiques').get();
   for(const boutDoc of boutSnap.docs){
+    const b = boutDoc.data();
+    if(b.actif === false) continue; /* Skip boutiques inactives */
     const prodsSnap = await boutDoc.ref.collection('produits').get();
     for(const prodDoc of prodsSnap.docs){
       const p = prodDoc.data();
       const name = (p.name || p.nom || '').toLowerCase();
       if(name.includes(search) || search.includes(name.split(' ')[0].toLowerCase())){
-        return { ref: prodDoc.ref, data: p, id: prodDoc.id, boutique: boutDoc.id };
+        results.push({
+          ref:      prodDoc.ref,
+          data:     p,
+          id:       prodDoc.id,
+          boutiqueId:  boutDoc.id,
+          boutiqueNom: b.nom || boutDoc.id,
+        });
       }
     }
   }
-
-  /* Cherche aussi dans /products global */
-  const globalSnap = await db.collection('products').get();
-  for(const doc of globalSnap.docs){
-    const p = doc.data();
-    const name = (p.name || '').toLowerCase();
-    if(name.includes(search)){
-      return { ref: doc.ref, data: p, id: doc.id, boutique: 'global' };
-    }
-  }
-  return null;
+  return results;
 }
 
 /* ══════════════════════════════════════════
    COMMANDE /video — Admin seulement
-   Usage: /video nom_du_produit
-   Puis envoyer la vidéo dans le chat
+   Propose un choix de boutique avec boutons
    ══════════════════════════════════════════ */
 bot.onText(/\/video(?:\s+(.+))?/, async (msg) => {
   const chatId = String(msg.chat.id);
-
-  /* Admin seulement */
   if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895'){
-    return bot.sendMessage(msg.chat.id, '❌ Commande réservée à l\'admin.');
+    return bot.sendMessage(msg.chat.id, "❌ Commande réservée à l\'admin.");
   }
-  if(!db){
-    return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté.');
-  }
-  if(!CLOUDINARY.CLOUD || CLOUDINARY.CLOUD === 'VOTRE_CLOUD_NAME'){
-    return bot.sendMessage(msg.chat.id,
-      '⚙️ *Cloudinary non configuré*\n\n' +
-      'Sur Railway, ajoute ces variables d\'environnement :\n' +
-      '`CLOUDINARY_CLOUD` = ton Cloud Name\n' +
-      '`CLOUDINARY_PRESET` = ton Upload Preset (unsigned)\n\n' +
-      'Crée un compte gratuit sur cloudinary.com',
-      { parse_mode: 'Markdown' }
-    );
-  }
+  if(!db) return bot.sendMessage(msg.chat.id, "❌ Firebase non connecté.");
 
   const nomProduit = (msg.text.match(/\/video\s+(.+)/)?.[1] || '').trim();
-
   if(!nomProduit){
     return bot.sendMessage(msg.chat.id,
-      '📹 *Commande vidéo produit*\n\n' +
-      'Usage : `/video nom_du_produit`\n\n' +
-      'Exemples :\n' +
-      '`/video Forbidden Fruit 120u`\n' +
-      '`/video Rainbow Belt`\n' +
-      '`/video Tekmache`\n\n' +
-      'Après la commande, envoie la vidéo directement ici.',
-      { parse_mode: 'Markdown' }
+      "📹 *Commande vidéo produit*\n\n" +
+      "Usage : `/video nom_du_produit`\n\n" +
+      "Exemples :\n" +
+      "`/video Forbidden Fruit 120u`\n" +
+      "`/video Rainbow Belt`\n" +
+      "Le bot te proposera de choisir la boutique.",
+      { parse_mode: "Markdown" }
     );
   }
 
-  /* Cherche le produit */
-  const statusMsg = await bot.sendMessage(msg.chat.id, `🔍 Recherche *${nomProduit}*...`, { parse_mode: 'Markdown' });
+  const statusMsg = await bot.sendMessage(msg.chat.id,
+    "🔍 Recherche *" + nomProduit + "* dans les boutiques actives...",
+    { parse_mode: "Markdown" }
+  );
 
-  const produit = await findProduitByName(nomProduit);
-  if(!produit){
+  const resultats = await findProduitDansBoutiques(nomProduit);
+
+  if(!resultats.length){
     return bot.editMessageText(
-      `❌ Produit *${nomProduit}* introuvable.\n\nVérifie le nom exact dans le panel admin.`,
-      { chat_id: msg.chat.id, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
+      "❌ Produit *" + nomProduit + "* introuvable.\n\nVérifie le nom dans le panel admin.",
+      { chat_id: msg.chat.id, message_id: statusMsg.message_id, parse_mode: "Markdown" }
     );
   }
 
-  /* Sauvegarde en attente */
+  /* 1 seul résultat → pas de choix */
+  if(resultats.length === 1){
+    const p = resultats[0];
+    pendingVideoUpload[chatId] = {
+      allRefs:    [p.ref],
+      produitNom: p.data.name || p.data.nom || nomProduit,
+      boutique:   p.boutiqueNom,
+    };
+    return bot.editMessageText(
+      "✅ *" + (p.data.name||p.data.nom) + "*\n" +
+      "📍 Boutique : *" + p.boutiqueNom + "*\n\n" +
+      "📹 Envoie maintenant ta vidéo (MOV, MP4...)\n" +
+      "L\'upload démarre automatiquement.",
+      { chat_id: msg.chat.id, message_id: statusMsg.message_id, parse_mode: "Markdown" }
+    );
+  }
+
+  /* Plusieurs boutiques → boutons */
   pendingVideoUpload[chatId] = {
-    produitRef: produit.ref,
-    produitNom: produit.data.name || produit.data.nom || nomProduit,
-    boutique:   produit.boutique,
-    msgId:      statusMsg.message_id,
+    step:        "choose_boutique",
+    resultats:   resultats,
+    nomProduit:  nomProduit,
+    statusMsgId: statusMsg.message_id,
   };
 
+  const btns = resultats.map(r => ([{
+    text: "🏪 " + r.boutiqueNom,
+    callback_data: "vidvill:" + chatId + ":" + r.boutiqueId,
+  }]));
+  btns.push([{ text: "🌍 Toutes les boutiques", callback_data: "vidvill:" + chatId + ":ALL" }]);
+
   await bot.editMessageText(
-    `✅ Produit trouvé : *${produit.data.name || produit.data.nom}*\n` +
-    `📍 Boutique : ${produit.boutique}\n\n` +
-    `📹 *Envoie maintenant ta vidéo* (MOV, MP4...)\n` +
-    `L'upload démarre automatiquement.`,
-    { chat_id: msg.chat.id, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
+    "✅ *" + nomProduit + "* trouvé dans *" + resultats.length + " boutiques*\n\n" +
+    "📍 Choisis la boutique à mettre à jour :",
+    {
+      chat_id:      msg.chat.id,
+      message_id:   statusMsg.message_id,
+      parse_mode:   "Markdown",
+      reply_markup: { inline_keyboard: btns },
+    }
   );
 });
 
@@ -496,13 +542,13 @@ bot.onText(/\/video(?:\s+(.+))?/, async (msg) => {
    ══════════════════════════════════════════ */
 bot.on('video', async (msg) => {
   const chatId = String(msg.chat.id);
-  if(chatId !== CONFIG.ADMIN_CHAT) return;
+  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
   await handleVideoUpload(msg, msg.video.file_id, msg.video.file_name || 'video.mp4');
 });
 
 bot.on('document', async (msg) => {
   const chatId = String(msg.chat.id);
-  if(chatId !== CONFIG.ADMIN_CHAT) return;
+  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
   /* Accepte les documents vidéo (MOV, MP4 envoyés comme fichier) */
   const mime = msg.document?.mime_type || '';
   if(!mime.startsWith('video/')) return;
@@ -538,20 +584,23 @@ async function handleVideoUpload(msg, fileId, filename){
       { chat_id: msg.chat.id, message_id: uploadMsg.message_id }
     );
 
-    /* Sauvegarde l\'URL dans Firestore sur le produit */
-    await pending.produitRef.update({
-      videoURL:  videoUrl,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    /* Sauvegarde sur TOUS les refs sélectionnés */
+    const refs = pending.allRefs || (pending.produitRef ? [pending.produitRef] : []);
+    if(refs.length){
+      await Promise.all(refs.map(ref => ref.update({
+        videoURL:  videoUrl,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      })));
+    }
 
-    /* Nettoie l'état en attente */
     delete pendingVideoUpload[chatId];
 
     await bot.editMessageText(
-      `✅ *Vidéo uploadée avec succès !*\n\n` +
-      `📦 Produit : *${pending.produitNom}*\n` +
-      `🔗 URL : ${videoUrl}\n\n` +
-      `La vidéo s\'affiche maintenant dans la mini app sur la fiche produit.`,
+      "✅ *Vidéo uploadée !*\n\n" +
+      "📦 Produit : *" + pending.produitNom + "*\n" +
+      "📍 " + (pending.boutique || '') + "\n" +
+      "🏪 Mis à jour dans " + refs.length + " boutique(s)\n\n" +
+      "La vidéo s\'affiche maintenant dans la mini app.",
       { chat_id: msg.chat.id, message_id: uploadMsg.message_id, parse_mode: 'Markdown' }
     );
 

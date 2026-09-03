@@ -297,6 +297,17 @@ bot.on('callback_query', async (query) => {
   const parts   = query.data.split(':');
   const action  = parts[0];
 
+  /* ── Boutons menu admin ── */
+  if(action === 'admin'){
+    const sub = parts[1];
+    await bot.answerCallbackQuery(query.id);
+    if(sub === 'orders')  return bot.sendMessage(query.message.chat.id, '/orders',  {});
+    if(sub === 'stats')   return bot.sendMessage(query.message.chat.id, '/stats',   {});
+    if(sub === 'stock')   return bot.sendMessage(query.message.chat.id, '/stock',   {});
+    if(sub === 'clients') return bot.sendMessage(query.message.chat.id, '/clients', {});
+    return;
+  }
+
   /* ── Choix boutique pour upload vidéo ── */
   if(action === 'vidvill'){
     const adminId    = parts[1];
@@ -485,6 +496,52 @@ bot.onText(/\/start/, async (msg) => {
   );
 });
 
+/* ══════════════════════════════════════════
+   /admin — Menu principal admin
+   ══════════════════════════════════════════ */
+bot.onText(/\/admin/, async (msg) => {
+  const chatId = String(msg.chat.id);
+  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
+
+  const text =
+    '🌿 *GoldenTrichomes — Panel Admin*\n' +
+    '━━━━━━━━━━━━━━━━━━━━━━━━\n\n' +
+    '📦 *Commandes*\n' +
+    '  /orders — Commandes actives\n\n' +
+    '📊 *Stats & Stock*\n' +
+    '  /stats — Dashboard complet\n' +
+    '  /stock — Stock par boutique\n' +
+    '  /stock [ville] — Ex: /stock casablanca\n' +
+    '  /cleanstock — Supprimer les doublons\n\n' +
+    '👥 *Clients*\n' +
+    '  /clients — Liste et stats clients\n' +
+    '  /broadcast [msg] — Envoyer à tous\n\n' +
+    '🎬 *Vidéos produits*\n' +
+    '  /video [nom] — Uploader une vidéo\n' +
+    '  /videos — Produits avec vidéo\n\n' +
+    '━━━━━━━━━━━━━━━━━━━━━━━━\n' +
+    '🏪 Boutiques actives : Casablanca · Rabat';
+
+  bot.sendMessage(msg.chat.id, text, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '📦 Commandes', callback_data: 'admin:orders' },
+          { text: '📊 Stats',     callback_data: 'admin:stats'  },
+        ],
+        [
+          { text: '📋 Stock',     callback_data: 'admin:stock'  },
+          { text: '👥 Clients',   callback_data: 'admin:clients'},
+        ],
+        [
+          { text: '🛒 Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } },
+        ],
+      ],
+    },
+  });
+});
+
 bot.onText(/\/orders/, async (msg) => {
   if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT && String(msg.chat.id) !== '7524388895') return;
   if (!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
@@ -541,18 +598,17 @@ bot.onText(/\/stats/, async (msg) => {
       allOrders.docs.map(d => d.data().clientChatId || d.data().telegramId).filter(Boolean)
     ).size;
 
-    /* Nouveaux clients aujourd'hui / cette semaine */
+    /* Actifs aujourd'hui = lastSeen aujourd'hui */
     const clientsToday = allClients.docs.filter(d => {
-      const t = d.data().createdAt?.toDate ? d.data().createdAt.toDate()
-              : d.data().lastSeen?.toDate  ? d.data().lastSeen.toDate() : null;
+      const t = d.data().lastSeen?.toDate ? d.data().lastSeen.toDate() : null;
       return t && t >= today;
     }).length;
+    /* Nouveaux cette semaine = createdAt cette semaine */
     const clientsWeek = allClients.docs.filter(d => {
-      const t = d.data().createdAt?.toDate ? d.data().createdAt.toDate()
-              : d.data().lastSeen?.toDate  ? d.data().lastSeen.toDate() : null;
+      const t = d.data().createdAt?.toDate ? d.data().createdAt.toDate() : null;
       return t && t >= weekAgo;
     }).length;
-    /* Actifs cette semaine (ont ouvert le bot) */
+    /* Actifs cette semaine = lastSeen cette semaine */
     const clientsActiveWeek = allClients.docs.filter(d => {
       const t = d.data().lastSeen?.toDate ? d.data().lastSeen.toDate() : null;
       return t && t >= weekAgo;
@@ -588,10 +644,10 @@ bot.onText(/\/stats/, async (msg) => {
       '━━━━━━━━━━━━━━━━━━━━\n\n' +
       '👥 *Utilisateurs*\n' +
       `  📱 Total inscrits : *${allClients.size}*\n` +
-      `  🆕 Aujourd\'hui : *${clientsToday}*\n` +
-      `  📅 Cette semaine : *${clientsWeek}*\n` +
-      `  🔥 Actifs 7j : *${clientsActiveWeek}*\n` +
-      `  🛒 Ont commandé : *${clientsWithOrders}*\n\n` +
+      `  👁️ Actifs aujourd\'hui : *${clientsToday}*\n` +
+      `  🆕 Nouveaux cette semaine : *${clientsWeek}*\n` +
+      `  🔥 Actifs 7 derniers jours : *${clientsActiveWeek}*\n` +
+      `  🛒 Ont déjà commandé : *${clientsWithOrders}*\n\n` +
       '📦 *Commandes*\n' +
       `  📅 Aujourd\'hui : *${ordersToday}*\n` +
       `  📆 Cette semaine : *${ordersWeek}*\n` +

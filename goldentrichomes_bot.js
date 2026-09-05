@@ -82,6 +82,26 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => res.json({ status: 'GoldenTrichomes Bot Online 🌿' }));
 app.post('/webhook', (req, res) => { bot.processUpdate(req.body); res.sendStatus(200); });
 
+/* /notify — reçoit les messages du panel admin et les envoie via Telegram */
+app.options('/notify', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+app.post('/notify', async (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  try{
+    const { chatId, text, parse_mode } = req.body;
+    if(!chatId || !text) return res.status(400).json({ error: 'chatId et text requis' });
+    await bot.sendMessage(String(chatId), text, { parse_mode: parse_mode || 'Markdown' });
+    res.json({ ok: true });
+  }catch(e){
+    console.error('/notify error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /* ══════════════════════════════════════════
    STATUTS
    ══════════════════════════════════════════ */

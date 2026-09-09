@@ -11,7 +11,7 @@ const FormData    = require('form-data');
    ══════════════════════════════════════════ */
 const CONFIG = {
   BOT_TOKEN:    process.env.BOT_TOKEN   || '8689166931:AAFweXM9nYW9YoY6-W0INnNURCCXpJ7bMjU',
-  ADMIN_CHAT:   process.env.ADMIN_CHAT  || '7670750855',
+  ADMIN_CHAT:   process.env.ADMIN_CHAT  || '7670750855', /* Admin principal */
   GROUP_CHAT:   process.env.GROUP_CHAT  || '-1003981429957',
   WEBHOOK_URL:  process.env.WEBHOOK_URL || 'https://goldentrichomes-bot-production.up.railway.app',
   MINI_APP_URL: 'https://melodic-baklava-cd5a09.netlify.app/',
@@ -24,6 +24,39 @@ const CONFIG = {
     SOL:        '45hP6dSNnNxP3at3seQ1pjwPoLXujneTvCoutbecFnpw',
   },
 };
+
+/* ══════════════════════════════════════════
+   MULTI-ADMINS
+   Ajoute des IDs ici pour donner accès admin
+   ══════════════════════════════════════════ */
+const ADMINS = new Set([
+  '7670750855',   /* Admin principal — compte 2 */
+  '7524388895',   /* Isaac — @JOCKER_OFM */
+  /* Ajoute d'autres IDs ici : '123456789', */
+]);
+
+/* Rôles : SUPER = tout, MANAGER = stock+commandes, VIEWER = lecture seule */
+const ADMIN_ROLES = {
+  '7670750855': 'SUPER',
+  '7524388895': 'SUPER',
+};
+
+function isAdmin(chatId){ return ADMINS.has(String(chatId)); }
+function isSuperAdmin(chatId){ return ADMIN_ROLES[String(chatId)] === 'SUPER'; }
+function adminName(chatId){
+  const names = {
+    '7670750855': 'Isaac 👑',
+    '7524388895': 'Isaac (@JOCKER_OFM) 👑',
+  };
+  return names[String(chatId)] || 'Admin';
+}
+
+/* Envoie une notif à TOUS les admins */
+async function notifyAllAdmins(text, opts={}){
+  for(const id of ADMINS){
+    await bot.sendMessage(id, text, { parse_mode:'Markdown', ...opts }).catch(()=>{});
+  }
+}
 
 /* ══════════════════════════════════════════
    CLOUDINARY CONFIG
@@ -157,7 +190,7 @@ async function decrementStock(order){
 
       /* Alerte si rupture ou stock bas */
       if(newStatut === 'out'){
-        await bot.sendMessage(CONFIG.ADMIN_CHAT,
+        await notifyAllAdmins(
           `🚨 *RUPTURE DE STOCK*\n\n` +
           `❌ *${item.name}* est épuisé\n` +
           `📍 Boutique : ${villeId}\n\n` +
@@ -165,7 +198,7 @@ async function decrementStock(order){
           { parse_mode: 'Markdown' }
         ).catch(()=>{});
       } else if(newStatut === 'low'){
-        await bot.sendMessage(CONFIG.ADMIN_CHAT,
+        await notifyAllAdmins(
           `⚠️ *Stock bas*\n\n` +
           `📦 *${item.name}* — seulement *${newStock}g* restants\n` +
           `📍 Boutique : ${villeId}`,
@@ -251,23 +284,24 @@ function buildOrderText(order, orderId) {
   const tgU   = (order.telegramUser || '').replace(/[<>&]/g,'');
   const code  = (order.code || orderId.slice(0,8).toUpperCase()).replace(/[<>&]/g,'');
 
+  const totalMAD = (order.totalMAD || order.total || 0).toLocaleString('fr-MA');
+  const livLabel = order.delivery === 'delivery' ? '🛵 Livraison domicile' : '🏪 Click & Collect';
+
   return (
-    `${statut.emoji} <b>Commande GoldenTrichomes</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📋 Code : <code>${code}</code>\n` +
-    `📅 Date : ${date}\n` +
-    `👤 Client : ${name}\n` +
-    `📞 Tél : ${phone}\n` +
-    (tgU ? `✈️ Telegram : @${tgU}\n` : '') +
-    `📍 Ville : ${ville}\n` +
-    `🕐 Créneau : ${slot}\n` +
-    `💳 Paiement : ${payLabel(order.payment)}\n` +
-    `🚚 Livraison : ${order.delivery === 'delivery' ? '🛵 À domicile' : '🏪 Click & Collect'}\n` +
-    (addr ? `📍 Adresse : ${addr}\n` : '') +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `${statut.emoji} <b>🌿 GOLDENTRICHOMES — Nouvelle Commande</b>\n` +
+    `═══════════════════════════\n\n` +
+    `🎟️ <code>${code}</code>  |  📅 ${date}\n\n` +
+    `👤 <b>${name}</b>\n` +
+    `📞 ${phone}` + (tgU ? `  |  @${tgU}` : '') + `\n\n` +
+    `📍 <b>${ville}</b> — ${slot}\n` +
+    `${livLabel}\n` +
+    (addr ? `🏠 ${addr}\n` : '') +
+    `💳 ${payLabel(order.payment)}\n\n` +
+    `───────────────────────────\n` +
+    `🛒 <b>Articles :</b>\n` +
     `${items || '  (aucun article)'}\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `💰 <b>Total : ${(order.totalMAD || order.total || 0).toLocaleString('fr-MA')} MAD</b>\n` +
+    `───────────────────────────\n` +
+    `💰 <b>TOTAL : ${totalMAD} MAD</b>\n\n` +
     `📊 Statut : <b>${statut.label}</b>`
   );
 }
@@ -442,6 +476,64 @@ bot.on('callback_query', async (query) => {
     }
   }
 
+  /* ── Info about ── */
+  if(action === 'info'){
+    if(parts[1] === 'about'){
+      await bot.answerCallbackQuery(query.id);
+      await bot.sendMessage(query.message.chat.id,
+        '🌿 *À propos de GoldenTrichomes*\n' +
+        '━━━━━━━━━━━━━━━━━━━━\n\n' +
+        '🏅 *Qualité premium* — Sélection rigoureuse\n' +
+        '🇲🇦 *100% Marocain* — Terroirs authentiques\n' +
+        '📦 *Livraison* — Partout au Maroc\n' +
+        '🔒 *Discret* — Emballage sécurisé\n' +
+        '💬 *Support* — 7j/7 via Telegram\n\n' +
+        '📞 Contact : @JOCKER\_OFM',
+        { parse_mode: 'Markdown' }
+      );
+    }
+    return;
+  }
+
+  /* ── Admin shortcuts ── */
+  if(action === 'admin'){
+    const cid = String(query.from.id);
+    if(!isAdmin(cid)){ await bot.answerCallbackQuery(query.id, { text: '❌ Accès refusé' }); return; }
+
+    await bot.answerCallbackQuery(query.id);
+
+    if(parts[1] === 'orders'){
+      bot.emit('text', { ...query.message, from: query.from, text: '/orders', chat: { id: query.from.id } });
+    }
+    if(parts[1] === 'stats'){
+      bot.emit('text', { ...query.message, from: query.from, text: '/stats', chat: { id: query.from.id } });
+    }
+    if(parts[1] === 'stock'){
+      bot.emit('text', { ...query.message, from: query.from, text: '/stock', chat: { id: query.from.id } });
+    }
+    if(parts[1] === 'clients'){
+      bot.emit('text', { ...query.message, from: query.from, text: '/clients', chat: { id: query.from.id } });
+    }
+    if(parts[1] === 'videos'){
+      bot.emit('text', { ...query.message, from: query.from, text: '/videos', chat: { id: query.from.id } });
+    }
+    if(parts[1] === 'broadcast'){
+      await bot.sendMessage(cid,
+        '📢 *Broadcast*\n\nUsage : `/broadcast Votre message`\n\nEx: `/broadcast Nouvelle arrivée ! 🌿`',
+        { parse_mode: 'Markdown' }
+      );
+    }
+    if(parts[1] === 'admins'){
+      let admText = '👥 *Admins GoldenTrichomes*\n━━━━━━━━━━━━━━━━━━━━\n\n';
+      for(const [id, role] of Object.entries(ADMIN_ROLES)){
+        admText += `  • ${adminName(id)} — ${role}\n  ID: \`${id}\`\n\n`;
+      }
+      admText += '\n💡 Pour ajouter un admin, contacte le développeur.';
+      await bot.sendMessage(cid, admText, { parse_mode: 'Markdown' });
+    }
+    return;
+  }
+
   if (action === 'details') {
     try {
       let details = `🔍 *Détails commande*\n\n`;
@@ -502,18 +594,27 @@ bot.onText(/\/start/, async (msg) => {
       lastSeen:         admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true }).catch(() => {});
   }
-  await bot.sendMessage(chatId,
-    `🌿 *Bienvenue chez GoldenTrichomes* 🌿\n\nSalam ${name} 👋\n\nQualité marocaine, livraison partout au Maroc 🇲🇦\n\n👇 Clique pour commander :`,
-    {
-      parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [[{
-          text: '🛒 Ouvrir la boutique',
-          web_app: { url: CONFIG.MINI_APP_URL },
-        }]],
-      },
-    }
-  );
+  /* Message d'accueil premium */
+  const welcomeText =
+    `🌿 *Bienvenue chez GoldenTrichomes* 🌿\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `Salam *${name}* 👋\n\n` +
+    `✨ *Qualité Marocaine Premium*\n` +
+    `📦 Livraison partout au Maroc 🇲🇦\n` +
+    `🔒 100% sécurisé & discret\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `👇 *Clique pour explorer notre catalogue :*`;
+
+  await bot.sendMessage(chatId, welcomeText, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🛒 Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } }],
+        [{ text: '📞 Nous contacter', url: 'https://t.me/JOCKER_OFM' },
+         { text: 'ℹ️ À propos', callback_data: 'info:about' }],
+      ],
+    },
+  });
 });
 
 /* ══════════════════════════════════════════
@@ -521,38 +622,37 @@ bot.onText(/\/start/, async (msg) => {
    ══════════════════════════════════════════ */
 bot.onText(/\/admin/, async (msg) => {
   const chatId = String(msg.chat.id);
-  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
+  if(!isAdmin(chatId)) return;
+
+  const role = ADMIN_ROLES[chatId] || 'ADMIN';
+  const now  = new Date().toLocaleString('fr-MA', { timeZone: 'Africa/Casablanca' });
 
   const text =
-    '🌿 *GoldenTrichomes — Panel Admin*\n' +
-    '━━━━━━━━━━━━━━━━━━━━━━━━\n\n' +
-    '📦 *Commandes*\n' +
-    '  /orders — Commandes actives\n\n' +
-    '📊 *Stats & Stock*\n' +
-    '  /stats — Dashboard complet\n' +
-    '  /stock — Stock par boutique\n' +
-    '  /stock [ville] — Ex: /stock casablanca\n' +
-    '  /cleanstock — Supprimer les doublons\n\n' +
-    '👥 *Clients*\n' +
-    '  /clients — Liste et stats clients\n' +
-    '  /broadcast [msg] — Envoyer à tous\n\n' +
-    '🎬 *Vidéos produits*\n' +
-    '  /video [nom] — Uploader une vidéo\n' +
-    '  /videos — Produits avec vidéo\n\n' +
-    '━━━━━━━━━━━━━━━━━━━━━━━━\n' +
-    '🏪 Boutiques actives : Casablanca · Rabat';
+    `🌿 *GoldenTrichomes — Admin Panel*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `👤 Connecté : *${adminName(chatId)}*\n` +
+    `🔑 Rôle : *${role}*\n` +
+    `🕐 ${now}\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━`;
 
   bot.sendMessage(msg.chat.id, text, {
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [
         [
-          { text: '📦 Commandes', callback_data: 'admin:orders' },
-          { text: '📊 Stats',     callback_data: 'admin:stats'  },
+          { text: '📦 Commandes actives', callback_data: 'admin:orders' },
         ],
         [
-          { text: '📋 Stock',     callback_data: 'admin:stock'  },
-          { text: '👥 Clients',   callback_data: 'admin:clients'},
+          { text: '📊 Dashboard stats',   callback_data: 'admin:stats'  },
+          { text: '📋 Stock boutiques',   callback_data: 'admin:stock'  },
+        ],
+        [
+          { text: '👥 Clients',           callback_data: 'admin:clients'},
+          { text: '📢 Broadcast',         callback_data: 'admin:broadcast'},
+        ],
+        [
+          { text: '🎬 Vidéos produits',   callback_data: 'admin:videos' },
+          { text: '👥 Admins',            callback_data: 'admin:admins' },
         ],
         [
           { text: '🛒 Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } },
@@ -563,18 +663,50 @@ bot.onText(/\/admin/, async (msg) => {
 });
 
 bot.onText(/\/orders/, async (msg) => {
-  if (String(msg.chat.id) !== CONFIG.ADMIN_CHAT && String(msg.chat.id) !== '7524388895') return;
-  if (!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
-  const snap = await db.collection('orders')
-    .where('status', 'in', ['new','confirmed','preparing','ready'])
-    .orderBy('createdAt','desc').limit(10).get();
-  if (snap.empty) return bot.sendMessage(msg.chat.id, '✅ Aucune commande active');
-  for (const d of snap.docs) await sendOrderToGroup(d.id, d.data());
+  if(!isAdmin(String(msg.chat.id))) return;
+  if(!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
+
+  const loadMsg = await bot.sendMessage(msg.chat.id, '⏳ Chargement des commandes actives...');
+
+  try{
+    const snap = await db.collection('orders')
+      .where('status','in',['new','confirmed','preparing','ready'])
+      .orderBy('createdAt','desc').limit(20).get();
+
+    if(snap.empty){
+      return bot.editMessageText(
+        '✅ *Aucune commande active*\n\nTout est traité ! 🎉',
+        { chat_id: msg.chat.id, message_id: loadMsg.message_id, parse_mode: 'Markdown' }
+      );
+    }
+
+    /* Résumé par statut */
+    const byStatus = {};
+    snap.docs.forEach(d => {
+      const s = d.data().status || 'new';
+      byStatus[s] = (byStatus[s]||0) + 1;
+    });
+    const summary = Object.entries(byStatus)
+      .map(([s,n]) => `${STATUTS[s]?.emoji||'•'} ${STATUTS[s]?.label||s}: *${n}*`)
+      .join('  |  ');
+
+    await bot.editMessageText(
+      `📦 *${snap.size} commandes actives*\n${summary}\n\nEnvoi dans le groupe...`,
+      { chat_id: msg.chat.id, message_id: loadMsg.message_id, parse_mode: 'Markdown' }
+    );
+
+    for(const d of snap.docs) await sendOrderToGroup(d.id, d.data());
+
+  }catch(e){
+    await bot.editMessageText('❌ Erreur : ' + e.message, {
+      chat_id: msg.chat.id, message_id: loadMsg.message_id
+    });
+  }
 });
 
 bot.onText(/\/stats/, async (msg) => {
   const chatId = String(msg.chat.id);
-  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
+  if(!isAdmin(chatId)) return;
   if(!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
 
   const loadMsg = await bot.sendMessage(msg.chat.id, '⏳ Chargement des stats...');
@@ -776,7 +908,7 @@ async function findProduitDansBoutiques(search){
    ══════════════════════════════════════════ */
 bot.onText(/\/video(?:\s+(.+))?/, async (msg) => {
   const chatId = String(msg.chat.id);
-  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895'){
+  if(!isAdmin(chatId)){
     return bot.sendMessage(msg.chat.id, "❌ Commande réservée à l\'admin.");
   }
   if(!db) return bot.sendMessage(msg.chat.id, "❌ Firebase non connecté.");
@@ -856,13 +988,13 @@ bot.onText(/\/video(?:\s+(.+))?/, async (msg) => {
    ══════════════════════════════════════════ */
 bot.on('video', async (msg) => {
   const chatId = String(msg.chat.id);
-  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
+  if(!isAdmin(chatId)) return;
   await handleVideoUpload(msg, msg.video.file_id, msg.video.file_name || 'video.mp4');
 });
 
 bot.on('document', async (msg) => {
   const chatId = String(msg.chat.id);
-  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
+  if(!isAdmin(chatId)) return;
   /* Accepte les documents vidéo (MOV, MP4 envoyés comme fichier) */
   const mime = msg.document?.mime_type || '';
   if(!mime.startsWith('video/')) return;
@@ -963,18 +1095,23 @@ bot.onText(/\/videos/, async (msg) => {
    ══════════════════════════════════════════ */
 bot.onText(/\/broadcast(?:\s+(.+))?/s, async (msg) => {
   const chatId = String(msg.chat.id);
-  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
+  if(!isAdmin(chatId)) return;
   if(!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
 
   const text = (msg.text.match(/\/broadcast\s+([\s\S]+)/)?.[1] || '').trim();
 
   if(!text){
     return bot.sendMessage(msg.chat.id,
-      '📢 *Broadcast*\n\n' +
-      'Usage :\n' +
-      '`/broadcast Votre message ici`\n\n' +
-      'Envoie ce message à *tous tes clients* qui ont utilisé le bot.\n\n' +
-      '⚠️ Utilise avec modération.',
+      '📢 *Broadcast GoldenTrichomes*\n' +
+      '━━━━━━━━━━━━━━━━━━━━\n\n' +
+      '📝 *Usage :*\n' +
+      '`/broadcast Votre message`\n\n' +
+      '📌 *Exemples :*\n' +
+      '`/broadcast 🌿 Nouvelle arrivée ! OG Kush disponible`\n' +
+      '`/broadcast 🔥 Promo -20% ce weekend sur tout le catalogue`\n' +
+      '`/broadcast ⚠️ Fermeture exceptionnelle demain`\n\n' +
+      '💡 *Tips :* Utilise des emojis, sois concis et impactant\n' +
+      '⚠️ *Attention :* Message envoyé à TOUS les clients',
       { parse_mode: 'Markdown' }
     );
   }
@@ -985,7 +1122,11 @@ bot.onText(/\/broadcast(?:\s+(.+))?/s, async (msg) => {
 
   const total    = snap.size;
   const statusMsg = await bot.sendMessage(msg.chat.id,
-    `📢 Envoi en cours à *${total}* clients...\n0/${total}`,
+    `📢 *Broadcast en cours...*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `👥 Total clients : *${total}*\n` +
+    `⏳ 0/${total} envoyés\n\n` +
+    `⚡ Envoi à 20 msg/sec max`,
     { parse_mode: 'Markdown' }
   );
 
@@ -1047,7 +1188,7 @@ bot.onText(/\/broadcast(?:\s+(.+))?/s, async (msg) => {
    ══════════════════════════════════════════ */
 bot.onText(/\/clients/, async (msg) => {
   const chatId = String(msg.chat.id);
-  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
+  if(!isAdmin(chatId)) return;
   if(!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
 
   const snap = await db.collection('clients').get();
@@ -1094,7 +1235,7 @@ bot.onText(/\/clients/, async (msg) => {
    ══════════════════════════════════════════ */
 bot.onText(/\/cleanstock(?:\s+(.+))?/, async (msg) => {
   const chatId = String(msg.chat.id);
-  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
+  if(!isAdmin(chatId)) return;
   if(!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
 
   const boutFilter = (msg.text.match(/\/cleanstock\s+(.+)/)?.[1] || '').trim().toLowerCase();
@@ -1154,7 +1295,7 @@ bot.onText(/\/cleanstock(?:\s+(.+))?/, async (msg) => {
    /stock [boutique] pour une boutique précise
    ══════════════════════════════════════════ */
 bot.onText(/\/stock(?:\s+(.+))?/, async (msg) => {
-  if(String(msg.chat.id) !== CONFIG.ADMIN_CHAT && String(msg.chat.id) !== '7524388895') return;
+  if(!isAdmin(String(msg.chat.id))) return;
   if(!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
 
   const filter = (msg.text.match(/\/stock\s+(.+)/)?.[1] || '').trim().toLowerCase();

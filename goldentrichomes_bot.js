@@ -450,12 +450,43 @@ bot.on('callback_query', async (query) => {
       /* ── Notif client ── */
       if (order.clientChatId) {
         const clientMsgs = {
-          confirmed: `✅ Ta commande *${order.code}* a été confirmée !\n🕐 Prépare-toi, on s\'en occupe.`,
-          preparing: `👨‍🍳 Ta commande *${order.code}* est en préparation !`,
-          ready:     `📦 Ta commande *${order.code}* est prête !\n🏪 Viens la récupérer à la boutique.`,
-          delivered: `🚴 Ta commande *${order.code}* est en route !`,
-          paid:      `💰 Paiement reçu pour *${order.code}*. Merci ! 🙏`,
-          cancelled: `❌ Ta commande *${order.code}* a été annulée.\nContacte-nous si c\'est une erreur.`,
+          confirmed:
+            `✅ *تأكيد الطلب — Commande confirmée*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `🎟️ Code : *${order.code}*\n\n` +
+            `🇲🇦 طلبيتك تأكدات! GoldenTrichomes كيتكفل بيك\n` +
+            `✨ Votre commande est confirmée ! On s\'en occupe.`,
+          preparing:
+            `👨‍🍳 *التحضير جاري — En préparation*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `🎟️ *${order.code}*\n\n` +
+            `⚡ طلبيتك كتتحضر دابا!\n` +
+            `⚡ Votre commande est en cours de préparation !`,
+          ready:
+            `📦 *جاهزة — Commande prête !* 🔥\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `🎟️ *${order.code}*\n\n` +
+            `✅ طلبيتك جاهزة — جي تاخدها!\n` +
+            `🏪 Votre commande est prête ! Venez la récupérer.`,
+          delivered:
+            `🛵 *في الطريق — En route !*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `🎟️ *${order.code}*\n\n` +
+            `🏎️ الديلفري مشى ليك!\n` +
+            `🚴 Votre commande est en route !`,
+          paid:
+            `💰 *الأداء وصل — Paiement reçu !* ✅\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `🎟️ *${order.code}*\n\n` +
+            `شكراً على ثقتك! 🙏 Merci de votre confiance !\n` +
+            `🌿 GoldenTrichomes — نشوفك المرة الجاية`,
+          cancelled:
+            `❌ *إلغاء الطلب — Commande annulée*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `🎟️ *${order.code}*\n\n` +
+            `معذرة، طلبيتك تلغات.\n` +
+            `Désolé, votre commande a été annulée.\n` +
+            `📞 تواصل معنا / Contactez-nous si erreur.`,
         };
         const clientMsg = clientMsgs[newStatus];
         if(clientMsg){
@@ -476,20 +507,56 @@ bot.on('callback_query', async (query) => {
     }
   }
 
+  /* ── Catalogue categories quick access ── */
+  if(action === 'cat'){
+    await bot.answerCallbackQuery(query.id);
+    const catNames = {
+      mostwanted: '🔥 Most Wanted',
+      drysift:    '✨ Drysift',
+      frozen:     '❄️ Frozen Sift',
+      static:     '⚡ Static',
+      ice:        "💎 Ice O'Lator",
+      beldia:     '🏔️ Beldia',
+    };
+    const cat = parts[1];
+    const catName = catNames[cat] || cat;
+    await bot.sendMessage(query.message.chat.id,
+      `${catName}\n\n` +
+      `👇 Découvre notre sélection ${catName} :`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '🛒 Voir le catalogue', web_app: { url: CONFIG.MINI_APP_URL } }
+          ]]
+        }
+      }
+    );
+    return;
+  }
+
   /* ── Info about ── */
   if(action === 'info'){
     if(parts[1] === 'about'){
       await bot.answerCallbackQuery(query.id);
       await bot.sendMessage(query.message.chat.id,
-        '🌿 *À propos de GoldenTrichomes*\n' +
+        '🌿 *GoldenTrichomes* 🌿\n' +
         '━━━━━━━━━━━━━━━━━━━━\n\n' +
-        '🏅 *Qualité premium* — Sélection rigoureuse\n' +
-        '🇲🇦 *100% Marocain* — Terroirs authentiques\n' +
-        '📦 *Livraison* — Partout au Maroc\n' +
-        '🔒 *Discret* — Emballage sécurisé\n' +
-        '💬 *Support* — 7j/7 via Telegram\n\n' +
-        '📞 Contact : @JOCKER\_OFM',
-        { parse_mode: 'Markdown' }
+        '🇲🇦 جودة مغربية 100% أصيلة\n' +
+        '    Qualité Marocaine 100% Premium\n\n' +
+        '🏆 اختيار دقيق — Sélection rigoureuse\n' +
+        '📦 توصيل لكل المدن — Livraison nationale\n' +
+        '🔒 تغليف سري — Emballage discret\n' +
+        '💬 دعم 7/7 — Support 7j/7\n' +
+        '💰 أسعار معقولة — Prix compétitifs\n\n' +
+        '━━━━━━━━━━━━━━━━━━━━\n' +
+        '📞 *تواصل / Contact :* @JOCKER\_OFM\n' +
+        '🌐 *Catalogue :* /start',
+        { parse_mode: 'Markdown',
+          reply_markup: { inline_keyboard: [[
+            { text: '🛒 فتح المتجر — Commander', web_app: { url: CONFIG.MINI_APP_URL } }
+          ]]}
+        }
       );
     }
     return;
@@ -571,17 +638,17 @@ bot.onText(/\/start/, async (msg) => {
   /* Vérifie si l'utilisateur a un username */
   if (!msg.from?.username) {
     return bot.sendMessage(chatId,
-      `🌿 *Bienvenue chez GoldenTrichomes* 🌿\n\n` +
-      `Salam ${name} 👋\n\n` +
-      `⚠️ *Pour commander, tu dois avoir un @username Telegram.*\n\n` +
-      `Voici comment en créer un :\n` +
-      `1. Va dans *Paramètres Telegram*\n` +
-      `2. Clique sur ton profil\n` +
-      `3. Clique sur *Nom d'utilisateur*\n` +
-      `4. Choisis un @username\n` +
-      `5. Reviens ici et tape /start\n\n` +
-      `C'est gratuit et prend 30 secondes ! 🙏`,
-      { parse_mode: 'HTML' }
+      `👋 Salam *${name}* !\n\n` +
+      `⚠️ *باش تطلب، خصك username على تيليغرام*\n` +
+      `⚠️ *Pour commander, tu dois avoir un @username*\n\n` +
+      `📱 *كيفاش تدير / Comment faire :*\n` +
+      `1️⃣ إعدادات تيليغرام / Paramètres Telegram\n` +
+      `2️⃣ پروفيلك / Ton profil\n` +
+      `3️⃣ اسم المستخدم / Nom d'utilisateur\n` +
+      `4️⃣ اختار اسم / Choisir un nom\n` +
+      `5️⃣ ارجع هنا / Revenir ici\n\n` +
+      `✅ مجاني وتاخد 30 ثانية ! / Gratuit, 30 secondes ! 🙏`,
+      { parse_mode: 'Markdown' }
     );
   }
   /* Enregistre le client dans Firebase */
@@ -594,24 +661,39 @@ bot.onText(/\/start/, async (msg) => {
       lastSeen:         admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true }).catch(() => {});
   }
-  /* Message d'accueil premium */
+  /* ═══ MESSAGE D'ACCUEIL STREET ART — AR + FR ═══ */
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? '🌅 صباح الخير' : hour < 18 ? '☀️ مساء النور' : '🌙 مساء الخير';
+
   const welcomeText =
-    `🌿 *Bienvenue chez GoldenTrichomes* 🌿\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `Salam *${name}* 👋\n\n` +
-    `✨ *Qualité Marocaine Premium*\n` +
-    `📦 Livraison partout au Maroc 🇲🇦\n` +
-    `🔒 100% sécurisé & discret\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `👇 *Clique pour explorer notre catalogue :*`;
+    `${greeting} *${name}* 👋\n\n` +
+    `🔥 *GoldenTrichomes* 🔥\n` +
+    `┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n` +
+    `🌿 جودة مغربية 100% أصيلة\n` +
+    `✨ Qualité Marocaine Premium\n\n` +
+    `📦 التوصيل لجميع المدن 🇲🇦\n` +
+    `🔒 Livraison discrète & sécurisée\n\n` +
+    `┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n` +
+    `👇 *اختار منتجك المفضل / Explore le catalogue :*`;
 
   await bot.sendMessage(chatId, welcomeText, {
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [
-        [{ text: '🛒 Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } }],
-        [{ text: '📞 Nous contacter', url: 'https://t.me/JOCKER_OFM' },
-         { text: 'ℹ️ À propos', callback_data: 'info:about' }],
+        [{ text: '🛒 فتح المتجر — Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } }],
+        [
+          { text: '🔥 Most Wanted', callback_data: 'cat:mostwanted' },
+          { text: '✨ Drysift',     callback_data: 'cat:drysift'   },
+        ],
+        [
+          { text: '❄️ Frozen',    callback_data: 'cat:frozen'   },
+          { text: '⚡ Static',    callback_data: 'cat:static'   },
+          { text: "💎 Ice O'Lator", callback_data: 'cat:ice'  },
+        ],
+        [
+          { text: '📞 واتساب / Contact', url: 'https://t.me/JOCKER_OFM' },
+          { text: 'ℹ️ À propos',         callback_data: 'info:about'    },
+        ],
       ],
     },
   });
@@ -625,38 +707,53 @@ bot.onText(/\/admin/, async (msg) => {
   if(!isAdmin(chatId)) return;
 
   const role = ADMIN_ROLES[chatId] || 'ADMIN';
-  const now  = new Date().toLocaleString('fr-MA', { timeZone: 'Africa/Casablanca' });
+  const now  = new Date().toLocaleString('fr-MA', { timeZone: 'Africa/Casablanca',
+    weekday:'long', day:'2-digit', month:'long', hour:'2-digit', minute:'2-digit' });
+
+  /* Quick stats inline */
+  let quickStats = '';
+  if(db){
+    try{
+      const [active, todayClients] = await Promise.all([
+        db.collection('orders').where('status','in',['new','confirmed','preparing','ready']).get(),
+        db.collection('clients').get(),
+      ]);
+      const today = new Date(); today.setHours(0,0,0,0);
+      const newToday = todayClients.docs.filter(d=>{
+        const t = d.data().createdAt?.toDate?.();
+        return t && t >= today;
+      }).length;
+      quickStats =
+        `\n📊 *Live :* ${active.size} commandes actives  |  +${newToday} clients aujourd\'hui`;
+    }catch(e){}
+  }
 
   const text =
-    `🌿 *GoldenTrichomes — Admin Panel*\n` +
+    `🔥 *GoldenTrichomes — لوحة التحكم*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `👤 Connecté : *${adminName(chatId)}*\n` +
-    `🔑 Rôle : *${role}*\n` +
-    `🕐 ${now}\n\n` +
+    `👑 *${adminName(chatId)}*  |  🔑 ${role}\n` +
+    `🕐 ${now}` +
+    quickStats + `\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━`;
 
   bot.sendMessage(msg.chat.id, text, {
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [
+        [{ text: '📦 الطلبيات النشطة — Commandes', callback_data: 'admin:orders' }],
         [
-          { text: '📦 Commandes actives', callback_data: 'admin:orders' },
+          { text: '📊 إحصائيات — Stats',  callback_data: 'admin:stats'     },
+          { text: '📋 مخزون — Stock',     callback_data: 'admin:stock'     },
         ],
         [
-          { text: '📊 Dashboard stats',   callback_data: 'admin:stats'  },
-          { text: '📋 Stock boutiques',   callback_data: 'admin:stock'  },
+          { text: '👥 عملاء — Clients',   callback_data: 'admin:clients'   },
+          { text: '📢 بث — Broadcast',    callback_data: 'admin:broadcast' },
         ],
         [
-          { text: '👥 Clients',           callback_data: 'admin:clients'},
-          { text: '📢 Broadcast',         callback_data: 'admin:broadcast'},
+          { text: '🎬 فيديو — Video',     callback_data: 'admin:videos'    },
+          { text: '👑 مشرفون — Admins',   callback_data: 'admin:admins'    },
         ],
-        [
-          { text: '🎬 Vidéos produits',   callback_data: 'admin:videos' },
-          { text: '👥 Admins',            callback_data: 'admin:admins' },
-        ],
-        [
-          { text: '🛒 Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } },
-        ],
+        [{ text: '🛒 فتح المتجر — Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } }],
       ],
     },
   });
@@ -1174,11 +1271,13 @@ bot.onText(/\/broadcast(?:\s+(.+))?/s, async (msg) => {
 
   /* Résumé final */
   await bot.editMessageText(
-    `✅ *Broadcast terminé !*\n\n` +
-    `📤 Message envoyé : "${text.slice(0,80)}${text.length>80?'...':''}"\n\n` +
-    `👥 Total clients : ${total}\n` +
-    `✅ Envoyés : *${sent}*\n` +
-    `❌ Échoués : ${failed} (bloqués ou supprimés)`,
+    `✅ *تم البث — Broadcast terminé !* 🔥\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `📤 "${text.slice(0,60)}${text.length>60?'...':''}"\n\n` +
+    `👥 إجمالي العملاء : *${total}*\n` +
+    `✅ وصل لـ : *${sent}*\n` +
+    `❌ فشل : ${failed} (بلوك أو محذوف)\n\n` +
+    `📊 معدل الوصول : *${Math.round(sent/total*100)}%*`,
     { chat_id: msg.chat.id, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
   ).catch(() => {});
 });

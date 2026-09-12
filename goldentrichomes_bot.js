@@ -124,14 +124,32 @@ app.options('/notify', (req, res) => {
 });
 app.post('/notify', async (req, res) => {
   res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
   try{
     const { chatId, text, parse_mode } = req.body;
     if(!chatId || !text) return res.status(400).json({ error: 'chatId et text requis' });
-    await bot.sendMessage(String(chatId), text, { parse_mode: parse_mode || 'Markdown' });
+    await bot.sendMessage(String(chatId), text, {
+      parse_mode: parse_mode || 'Markdown',
+      disable_web_page_preview: true,
+    });
     res.json({ ok: true });
   }catch(e){
-    console.error('/notify error:', e.message);
-    res.status(500).json({ error: e.message });
+    console.error('/notify error:', e.response?.body || e.message);
+    const tgCode = e.response?.body?.error_code;
+    /* 403 = bot bloqué par l'utilisateur — pas une vraie erreur serveur */
+    if(tgCode === 403) return res.json({ ok: false, warn: 'Bot bloqué par cet utilisateur' });
+    /* 400 = mauvais chatId ou markdown invalide */
+    if(tgCode === 400){
+      /* Réessaie sans parse_mode */
+      try{
+        const { chatId, text } = req.body;
+        await bot.sendMessage(String(chatId), text.replace(/[*_`\[\]]/g,''), {});
+        return res.json({ ok: true, warn: 'Markdown stripped' });
+      }catch(e2){ /* ignore */ }
+      return res.status(400).json({ error: 'Bad Request: ' + (e.response?.body?.description || e.message) });
+    }
+    /* Autres erreurs → 500 avec message clair */
+    res.status(500).json({ error: e.message, tgCode });
   }
 });
 
@@ -1493,6 +1511,30 @@ bot.onText(/\/stock(?:\s+(.+))?/, async (msg) => {
    API — POST /order
    Reçoit la commande depuis la Mini App
    ══════════════════════════════════════════ */
+
+/* ── /ping — visiteurs mini app ── */
+app.post('/ping', async (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  try{
+    const { telegramId, username, firstName, lastName, villeId } = req.body;
+    if(!telegramId) return res.status(200).json({ ok: false });
+    if(db){
+      await db.collection('visitors').doc(String(telegramId)).set({
+        telegramId: String(telegramId),
+        username: username || null,
+        firstName: firstName || '',
+        lastName: lastName || '',
+        villeId: villeId || null,
+        lastSeen: new Date().toISOString(),
+      }, { merge: true });
+    }
+    res.json({ ok: true });
+  }catch(e){
+    console.warn('/ping silencieux:', e.message);
+    res.status(200).json({ ok: false }); /* Toujours 200 */
+  }
+});
+
 app.post('/order', async (req, res) => {
   try {
     const order = req.body;

@@ -1054,45 +1054,35 @@ const _broadcastState = {}; /* { [adminChatId]: { step, text } } */
 
 function isAdmin(chatId){ return String(chatId) === CONFIG.ADMIN_CHAT || String(chatId) === '7524388895'; }
 
-/* Télécharge la vidéo depuis Telegram et la renvoie à l'admin via stream
-   pour obtenir un file_id sortant universel */
-async function _getUniversalFileId(originalFileId, adminChatId){
-  const { Readable } = require('stream');
-
-  /* 1. Obtenir l'URL de téléchargement */
-  const fileInfo = await bot.getFile(originalFileId);
-  const tgUrl = `https://api.telegram.org/file/bot${CONFIG.BOT_TOKEN}/${fileInfo.file_path}`;
-
-  /* 2. Télécharger en stream */
-  const response = await axios.get(tgUrl, { responseType: 'arraybuffer' });
-  const buffer = Buffer.from(response.data);
-
-  /* 3. Convertir en Readable stream avec les métadonnées requises par node-telegram-bot-api */
-  const stream = new Readable();
-  stream.push(buffer);
-  stream.push(null);
-  stream.path = 'broadcast.mp4'; /* IMPORTANT — sans .path, EFATAL Unsupported Buffer file-type */
-
-  /* 4. Envoyer à l'admin pour obtenir un file_id sortant */
-  const sent = await bot.sendVideo(adminChatId, stream, {
-    caption: '🔄 préparation broadcast...',
-    supports_streaming: true,
-  });
-
-  /* 5. Supprimer le message intermédiaire */
-  await bot.deleteMessage(adminChatId, sent.message_id).catch(() => {});
-
-  return sent.video.file_id;
-}
-
 async function _doBroadcast(adminChatId, text, videoFileId){
   if(!db) return bot.sendMessage(adminChatId, '❌ Firebase non connecté');
+
+  const keyboard = { inline_keyboard: [[{ text: '🛒 Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } }]] };
+  const caption = '🌿 *GoldenTrichomes*\n\n' + text;
+
+  /* Envoyer dans le groupe — tout le monde voit */
+  try{
+    if(videoFileId){
+      await bot.sendVideo(CONFIG.GROUP_CHAT, videoFileId, {
+        caption, parse_mode: 'Markdown', reply_markup: keyboard, supports_streaming: true,
+      });
+    } else {
+      await bot.sendMessage(CONFIG.GROUP_CHAT, caption, { parse_mode: 'Markdown', reply_markup: keyboard });
+    }
+    await bot.sendMessage(adminChatId, `✅ *Broadcast envoyé dans le groupe !*\n\n${videoFileId ? '🎬 Vidéo + texte' : '📝 Texte seul'}`, { parse_mode: 'Markdown' });
+  }catch(e){
+    await bot.sendMessage(adminChatId, `❌ Échec envoi groupe : ${e.message}`);
+  }
+}
+
+async function _doBroadcastClients(adminChatId, text, videoFileId){
+  if(!db) return;
   const snap = await db.collection('clients').get();
-  if(snap.empty) return bot.sendMessage(adminChatId, '⚠️ Aucun client enregistré.');
+  if(snap.empty) return;
 
   const total = snap.size;
   const statusMsg = await bot.sendMessage(adminChatId,
-    `📢 Envoi en cours à *${total}* clients...\n0/${total}`,
+    `📢 Envoi DM à *${total}* clients bot...\n0/${total}`,
     { parse_mode: 'Markdown' }
   );
 
@@ -1135,10 +1125,7 @@ async function _doBroadcast(adminChatId, text, videoFileId){
   }
 
   await bot.editMessageText(
-    `✅ *Broadcast terminé !*\n\n` +
-    `${videoFileId ? '🎬 Vidéo + texte' : '📝 Texte seul'}\n` +
-    `📤 "${text.slice(0,80)}${text.length>80?'...':''}"\n\n` +
-    `👥 Total : ${total}\n✅ Envoyés : *${sent}*\n❌ Échoués : ${failed}`,
+    `📊 DM clients : 👥 ${total} — ✅ ${sent} reçus, ❌ ${failed} échoués`,
     { chat_id: adminChatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
   ).catch(() => {});
 }
@@ -1178,11 +1165,8 @@ bot.on('message', async (msg) => {
   if(state.step === 'await_text' && msg.text && !msg.text.startsWith('/')){
     delete _broadcastState[adminId];
     const text = msg.text.trim();
-    await bot.sendMessage(adminId,
-      `✅ Message reçu — envoi à tous les clients...`,
-      { parse_mode: 'Markdown' }
-    );
-    return _doBroadcast(adminId, text, null);
+    await _doBroadcast(adminId, text, null);
+    return _doBroadcastClients(adminId, text, null);
   }
 
   /* Étape : attente vidéo+caption */
@@ -1193,22 +1177,10 @@ bot.on('message', async (msg) => {
     if(!text){
       return bot.sendMessage(adminId, '⚠️ Tu n\'as pas mis de texte en caption. Recommence avec /broadcast et écris le texte dans le champ caption de la vidéo.');
     }
-    const uploadMsg = await bot.sendMessage(adminId, `⏳ Préparation de la vidéo...`);
-    let universalFileId;
-    try{
-      universalFileId = await _getUniversalFileId(fileId, adminId);
-      await bot.editMessageText(
-        `✅ Vidéo prête — envoi à tous les clients...`,
-        { chat_id: adminId, message_id: uploadMsg.message_id }
-      ).catch(()=>{});
-    }catch(upErr){
-      await bot.editMessageText(
-        `❌ Échec : ${upErr.message}`,
-        { chat_id: adminId, message_id: uploadMsg.message_id }
-      ).catch(()=>{});
-      return;
-    }
-    return _doBroadcast(adminId, text, universalFileId);
+    /* Envoyer dans le groupe d'abord (file_id reçu d'un message entrant fonctionne pour le groupe) */
+    await _doBroadcast(adminId, text, fileId);
+    /* Pour les DM clients, utiliser le même file_id — si ça échoue encore c'est une limite Telegram */
+    return _doBroadcastClients(adminId, text, fileId);
   }
 });
 

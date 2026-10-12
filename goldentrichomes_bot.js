@@ -1054,24 +1054,32 @@ const _broadcastState = {}; /* { [adminChatId]: { step, text } } */
 
 function isAdmin(chatId){ return String(chatId) === CONFIG.ADMIN_CHAT || String(chatId) === '7524388895'; }
 
-/* Télécharge la vidéo depuis Telegram et la renvoie à l'admin pour obtenir
-   un file_id frais et universel (le file_id reçu d'un message entrant est limité) */
+/* Télécharge la vidéo depuis Telegram et la renvoie à l'admin via stream
+   pour obtenir un file_id sortant universel */
 async function _getUniversalFileId(originalFileId, adminChatId){
-  /* 1. Télécharger le fichier en mémoire */
+  const { Readable } = require('stream');
+
+  /* 1. Obtenir l'URL de téléchargement */
   const fileInfo = await bot.getFile(originalFileId);
   const tgUrl = `https://api.telegram.org/file/bot${CONFIG.BOT_TOKEN}/${fileInfo.file_path}`;
+
+  /* 2. Télécharger en stream */
   const response = await axios.get(tgUrl, { responseType: 'arraybuffer' });
   const buffer = Buffer.from(response.data);
 
-  /* 2. Renvoyer la vidéo à l'admin (chat privé bot↔admin) pour obtenir un file_id sortant */
-  const sent = await bot.sendVideo(adminChatId, buffer, {
-    caption: '🔄 [préparation broadcast — supprime ce message]',
+  /* 3. Convertir en Readable stream avec les métadonnées requises par node-telegram-bot-api */
+  const stream = new Readable();
+  stream.push(buffer);
+  stream.push(null);
+  stream.path = 'broadcast.mp4'; /* IMPORTANT — sans .path, EFATAL Unsupported Buffer file-type */
+
+  /* 4. Envoyer à l'admin pour obtenir un file_id sortant */
+  const sent = await bot.sendVideo(adminChatId, stream, {
+    caption: '🔄 préparation broadcast...',
     supports_streaming: true,
-    filename: 'broadcast.mp4',
-    contentType: 'video/mp4',
   });
 
-  /* 3. Supprimer ce message intermédiaire */
+  /* 5. Supprimer le message intermédiaire */
   await bot.deleteMessage(adminChatId, sent.message_id).catch(() => {});
 
   return sent.video.file_id;

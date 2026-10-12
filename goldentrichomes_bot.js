@@ -1060,16 +1060,17 @@ async function _doBroadcast(adminChatId, text, videoFileId){
   const keyboard = { inline_keyboard: [[{ text: '🛒 Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } }]] };
   const caption = '🌿 *GoldenTrichomes*\n\n' + text;
 
-  /* Envoyer dans le groupe — tout le monde voit */
+  /* Envoyer dans le groupe — sans parse_mode pour éviter les erreurs d'entités Markdown */
+  const groupCaption = '🌿 GoldenTrichomes\n\n' + text;
   try{
     if(videoFileId){
       await bot.sendVideo(CONFIG.GROUP_CHAT, videoFileId, {
-        caption, parse_mode: 'Markdown', reply_markup: keyboard, supports_streaming: true,
+        caption: groupCaption, reply_markup: keyboard, supports_streaming: true,
       });
     } else {
-      await bot.sendMessage(CONFIG.GROUP_CHAT, caption, { parse_mode: 'Markdown', reply_markup: keyboard });
+      await bot.sendMessage(CONFIG.GROUP_CHAT, groupCaption, { reply_markup: keyboard });
     }
-    await bot.sendMessage(adminChatId, `✅ *Broadcast envoyé dans le groupe !*\n\n${videoFileId ? '🎬 Vidéo + texte' : '📝 Texte seul'}`, { parse_mode: 'Markdown' });
+    await bot.sendMessage(adminChatId, `✅ Broadcast envoyé dans le groupe !\n${videoFileId ? '🎬 Vidéo + texte' : '📝 Texte seul'}`);
   }catch(e){
     await bot.sendMessage(adminChatId, `❌ Échec envoi groupe : ${e.message}`);
   }
@@ -1088,7 +1089,7 @@ async function _doBroadcastClients(adminChatId, text, videoFileId){
 
   let sent = 0, failed = 0;
   const keyboard = { inline_keyboard: [[{ text: '🛒 Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } }]] };
-  const caption = '🌿 *GoldenTrichomes*\n\n' + text;
+  const caption = '🌿 GoldenTrichomes\n\n' + text;
 
   for(const doc of snap.docs){
     const client = doc.data();
@@ -1099,12 +1100,11 @@ async function _doBroadcastClients(adminChatId, text, videoFileId){
       if(videoFileId){
         await bot.sendVideo(tgId, videoFileId, {
           caption,
-          parse_mode: 'Markdown',
           reply_markup: keyboard,
           supports_streaming: true,
         });
       } else {
-        await bot.sendMessage(tgId, caption, { parse_mode: 'Markdown', reply_markup: keyboard });
+        await bot.sendMessage(tgId, caption, { reply_markup: keyboard });
       }
       sent++;
     }catch(e){

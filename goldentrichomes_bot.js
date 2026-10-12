@@ -378,6 +378,29 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
+  /* ── Broadcast : choix texte ou vidéo ── */
+  if(query.data === 'bc_cancel'){
+    delete _broadcastState[query.message.chat.id];
+    await bot.answerCallbackQuery(query.id);
+    return bot.editMessageText('❌ Broadcast annulé.', { chat_id: query.message.chat.id, message_id: query.message.message_id });
+  }
+  if(query.data === 'bc_text'){
+    _broadcastState[query.message.chat.id] = { step: 'await_text' };
+    await bot.answerCallbackQuery(query.id);
+    return bot.editMessageText(
+      '📝 *Broadcast texte*\n\nÉcris ton message maintenant et envoie-le :',
+      { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: 'Markdown' }
+    );
+  }
+  if(query.data === 'bc_video'){
+    _broadcastState[query.message.chat.id] = { step: 'await_video' };
+    await bot.answerCallbackQuery(query.id);
+    return bot.editMessageText(
+      '🎬 *Broadcast vidéo\\+texte*\n\nEnvoie ta vidéo avec le texte en *caption*\\.\n\n_Appuie sur 📎, choisis la vidéo, écris le texte dans le champ caption, puis envoie\\._',
+      { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: 'MarkdownV2' }
+    );
+  }
+
   /* ── Choix boutique pour upload vidéo ── */
   if(action === 'vidvill'){
     const adminId    = parts[1];
@@ -1015,89 +1038,132 @@ bot.onText(/\/videos/, async (msg) => {
 });
 
 /* ══════════════════════════════════════════
-   /broadcast — Envoie un message à tous les clients
-   Usage: /broadcast Votre message ici
-   Supporte les images: envoie une photo avec caption /broadcast texte
+   /broadcast — Envoie un message (texte seul ou vidéo+texte) à tous les clients
+   Flow:
+     1. /broadcast              → choix texte seul ou vidéo+texte
+     2a. Texte seul  → tape le texte → envoie
+     2b. Vidéo+texte → envoie la vidéo avec le texte en caption
    ══════════════════════════════════════════ */
-bot.onText(/\/broadcast(?:\s+(.+))?/s, async (msg) => {
-  const chatId = String(msg.chat.id);
-  if(chatId !== CONFIG.ADMIN_CHAT && chatId !== '7524388895') return;
-  if(!db) return bot.sendMessage(msg.chat.id, '❌ Firebase non connecté');
 
-  const text = (msg.text.match(/\/broadcast\s+([\s\S]+)/)?.[1] || '').trim();
+/* État broadcast en attente par adminId */
+const _broadcastState = {}; /* { [adminChatId]: { step, text } } */
 
-  if(!text){
-    return bot.sendMessage(msg.chat.id,
-      '📢 *Broadcast*\n\n' +
-      'Usage :\n' +
-      '`/broadcast Votre message ici`\n\n' +
-      'Envoie ce message à *tous tes clients* qui ont utilisé le bot.\n\n' +
-      '⚠️ Utilise avec modération.',
-      { parse_mode: 'Markdown' }
-    );
-  }
+function isAdmin(chatId){ return String(chatId) === CONFIG.ADMIN_CHAT || String(chatId) === '7524388895'; }
 
-  /* Charge tous les clients */
+async function _doBroadcast(adminChatId, text, videoFileId){
+  if(!db) return bot.sendMessage(adminChatId, '❌ Firebase non connecté');
   const snap = await db.collection('clients').get();
-  if(snap.empty) return bot.sendMessage(msg.chat.id, '⚠️ Aucun client enregistré.');
+  if(snap.empty) return bot.sendMessage(adminChatId, '⚠️ Aucun client enregistré.');
 
-  const total    = snap.size;
-  const statusMsg = await bot.sendMessage(msg.chat.id,
+  const total = snap.size;
+  const statusMsg = await bot.sendMessage(adminChatId,
     `📢 Envoi en cours à *${total}* clients...\n0/${total}`,
     { parse_mode: 'Markdown' }
   );
 
   let sent = 0, failed = 0;
-
-  /* Bouton pour ouvrir la mini app */
-  const keyboard = {
-    inline_keyboard: [[{
-      text: '🛒 Ouvrir la boutique',
-      web_app: { url: CONFIG.MINI_APP_URL },
-    }]],
-  };
+  const keyboard = { inline_keyboard: [[{ text: '🛒 Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } }]] };
+  const caption = '🌿 *GoldenTrichomes*\n\n' + text;
 
   for(const doc of snap.docs){
     const client = doc.data();
     const tgId   = client.telegramId || client.chatId;
-    if(!tgId) { failed++; continue; }
+    if(!tgId){ failed++; continue; }
 
     try{
-      await bot.sendMessage(tgId,
-        '🌿 *GoldenTrichomes*\n\n' + text,
-        { parse_mode: 'Markdown', reply_markup: keyboard }
-      );
+      if(videoFileId){
+        await bot.sendVideo(tgId, videoFileId, {
+          caption,
+          parse_mode: 'Markdown',
+          reply_markup: keyboard,
+          supports_streaming: true,
+        });
+      } else {
+        await bot.sendMessage(tgId, caption, { parse_mode: 'Markdown', reply_markup: keyboard });
+      }
       sent++;
     }catch(e){
-      /* Client a bloqué le bot ou compte supprimé */
       failed++;
-      /* Supprime le client si compte introuvable */
       if(e.response?.body?.error_code === 403){
         await doc.ref.delete().catch(() => {});
       }
     }
 
-    /* Update progression toutes les 10 */
     if((sent + failed) % 10 === 0){
       await bot.editMessageText(
         `📢 Envoi en cours...\n${sent+failed}/${total} — ✅ ${sent} envoyés, ❌ ${failed} échoués`,
-        { chat_id: msg.chat.id, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
+        { chat_id: adminChatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
       ).catch(() => {});
     }
 
-    /* Délai anti-spam Telegram (30 msg/sec max) */
     await new Promise(r => setTimeout(r, 50));
   }
 
-  /* Résumé final */
   await bot.editMessageText(
     `✅ *Broadcast terminé !*\n\n` +
-    `📤 Message envoyé : "${text.slice(0,80)}${text.length>80?'...':''}"\n\n` +
-    `👥 Total clients : ${total}\n` +
-    `✅ Envoyés : *${sent}*\n` +
-    `❌ Échoués : ${failed} (bloqués ou supprimés)`,
-    { chat_id: msg.chat.id, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
+    `${videoFileId ? '🎬 Vidéo + texte' : '📝 Texte seul'}\n` +
+    `📤 "${text.slice(0,80)}${text.length>80?'...':''}"\n\n` +
+    `👥 Total : ${total}\n✅ Envoyés : *${sent}*\n❌ Échoués : ${failed}`,
+    { chat_id: adminChatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }
   ).catch(() => {});
+}
+
+bot.onText(/\/broadcast(?:\s+(.+))?/s, async (msg) => {
+  if(!isAdmin(msg.chat.id)) return;
+  const adminId = msg.chat.id;
+
+  /* Annule tout état précédent */
+  delete _broadcastState[adminId];
+
+  return bot.sendMessage(adminId,
+    '📢 *Broadcast*\n\nQue veux-tu envoyer à tes clients ?',
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ callback_data: 'bc_text', text: '📝 Texte seulement' }],
+          [{ callback_data: 'bc_video', text: '🎬 Vidéo + texte' }],
+          [{ callback_data: 'bc_cancel', text: '❌ Annuler' }],
+        ]
+      }
+    }
+  );
+});
+
+/* Les callbacks bc_text / bc_video / bc_cancel sont gérés dans le handler callback_query principal ci-dessous */
+
+/* Intercepte les messages admin en attente de broadcast */
+bot.on('message', async (msg) => {
+  const adminId = msg.chat.id;
+  if(!isAdmin(adminId)) return;
+  const state = _broadcastState[adminId];
+  if(!state) return;
+
+  /* Étape : attente texte seul */
+  if(state.step === 'await_text' && msg.text && !msg.text.startsWith('/')){
+    delete _broadcastState[adminId];
+    const text = msg.text.trim();
+    await bot.sendMessage(adminId,
+      `✅ Message reçu !\n\n_"${text.slice(0,100)}${text.length>100?'...':''}"_\n\nC\'est parti pour *${(await db.collection('clients').get()).size}* clients...`,
+      { parse_mode: 'Markdown' }
+    );
+    return _doBroadcast(adminId, text, null);
+  }
+
+  /* Étape : attente vidéo+caption */
+  if(state.step === 'await_video' && (msg.video || msg.document)){
+    delete _broadcastState[adminId];
+    const fileId = msg.video?.file_id || msg.document?.file_id;
+    const text   = (msg.caption || '').trim();
+    if(!text){
+      return bot.sendMessage(adminId, '⚠️ Tu n\'as pas mis de texte en caption. Recommence avec /broadcast et écris le texte dans le champ caption de la vidéo.');
+    }
+    await bot.sendMessage(adminId,
+      `✅ Vidéo reçue avec le texte !\nEnvoi à tous les clients...`,
+      { parse_mode: 'Markdown' }
+    );
+    return _doBroadcast(adminId, text, fileId);
+  }
 });
 
 /* ══════════════════════════════════════════

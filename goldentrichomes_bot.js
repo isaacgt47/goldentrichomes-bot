@@ -1054,27 +1054,27 @@ const _broadcastState = {}; /* { [adminChatId]: { step, text } } */
 
 function isAdmin(chatId){ return String(chatId) === CONFIG.ADMIN_CHAT || String(chatId) === '7524388895'; }
 
-/* Upload la vidéo dans le groupe privé du bot → retourne un file_id universel
-   Le groupe CONFIG.GROUP_CHAT est géré par le bot → son file_id est réutilisable en broadcast */
-async function _getUniversalFileId(originalFileId){
-  /* 1. Télécharger le fichier depuis Telegram */
+/* Télécharge la vidéo depuis Telegram et la renvoie à l'admin pour obtenir
+   un file_id frais et universel (le file_id reçu d'un message entrant est limité) */
+async function _getUniversalFileId(originalFileId, adminChatId){
+  /* 1. Télécharger le fichier en mémoire */
   const fileInfo = await bot.getFile(originalFileId);
   const tgUrl = `https://api.telegram.org/file/bot${CONFIG.BOT_TOKEN}/${fileInfo.file_path}`;
   const response = await axios.get(tgUrl, { responseType: 'arraybuffer' });
   const buffer = Buffer.from(response.data);
 
-  /* 2. Renvoyer la vidéo dans le groupe → le bot obtient un file_id universel */
-  const sent = await bot.sendVideo(CONFIG.GROUP_CHAT, buffer, {
-    caption: '📹 [broadcast cache — ignore]',
+  /* 2. Renvoyer la vidéo à l'admin (chat privé bot↔admin) pour obtenir un file_id sortant */
+  const sent = await bot.sendVideo(adminChatId, buffer, {
+    caption: '🔄 [préparation broadcast — supprime ce message]',
     supports_streaming: true,
     filename: 'broadcast.mp4',
     contentType: 'video/mp4',
   });
 
-  /* 3. Supprimer le message du groupe immédiatement */
-  await bot.deleteMessage(CONFIG.GROUP_CHAT, sent.message_id).catch(() => {});
+  /* 3. Supprimer ce message intermédiaire */
+  await bot.deleteMessage(adminChatId, sent.message_id).catch(() => {});
 
-  return sent.video.file_id; /* file_id universel utilisable pour tous les clients */
+  return sent.video.file_id;
 }
 
 async function _doBroadcast(adminChatId, text, videoFileId){
@@ -1171,7 +1171,7 @@ bot.on('message', async (msg) => {
     delete _broadcastState[adminId];
     const text = msg.text.trim();
     await bot.sendMessage(adminId,
-      `✅ Message reçu !\n\n_"${text.slice(0,100)}${text.length>100?'...':''}"_\n\nC\'est parti pour *${(await db.collection('clients').get()).size}* clients...`,
+      `✅ Message reçu — envoi à tous les clients...`,
       { parse_mode: 'Markdown' }
     );
     return _doBroadcast(adminId, text, null);
@@ -1185,19 +1185,17 @@ bot.on('message', async (msg) => {
     if(!text){
       return bot.sendMessage(adminId, '⚠️ Tu n\'as pas mis de texte en caption. Recommence avec /broadcast et écris le texte dans le champ caption de la vidéo.');
     }
-    const uploadMsg = await bot.sendMessage(adminId,
-      `⏳ Préparation de la vidéo pour broadcast...`,
-    );
+    const uploadMsg = await bot.sendMessage(adminId, `⏳ Préparation de la vidéo...`);
     let universalFileId;
     try{
-      universalFileId = await _getUniversalFileId(fileId);
+      universalFileId = await _getUniversalFileId(fileId, adminId);
       await bot.editMessageText(
         `✅ Vidéo prête — envoi à tous les clients...`,
         { chat_id: adminId, message_id: uploadMsg.message_id }
       ).catch(()=>{});
     }catch(upErr){
       await bot.editMessageText(
-        `❌ Échec préparation vidéo : ${upErr.message}`,
+        `❌ Échec : ${upErr.message}`,
         { chat_id: adminId, message_id: uploadMsg.message_id }
       ).catch(()=>{});
       return;

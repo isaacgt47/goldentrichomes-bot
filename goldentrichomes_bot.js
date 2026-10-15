@@ -1128,12 +1128,30 @@ async function _doBroadcast(adminChatId, text, videoFileId){
 
 async function _doBroadcastClients(adminChatId, text, videoFileId){
   if(!db) return;
-  const snap = await db.collection('clients').get();
-  if(snap.empty) return;
 
-  const total = snap.size;
+  /* Fusionner clients + sessions (qui ont un tgId) pour toucher tout le monde */
+  const [clientsSnap, sessionsSnap] = await Promise.all([
+    db.collection('clients').get(),
+    db.collection('sessions').where('tgId', '!=', null).get(),
+  ]);
+
+  /* Dédupliquer par telegramId */
+  const seen = new Set();
+  const targets = [];
+  for(const d of clientsSnap.docs){
+    const id = String(d.data().telegramId || d.data().chatId || '');
+    if(id && !seen.has(id)){ seen.add(id); targets.push(id); }
+  }
+  for(const d of sessionsSnap.docs){
+    const id = String(d.data().tgId || '');
+    if(id && !seen.has(id)){ seen.add(id); targets.push(id); }
+  }
+
+  if(!targets.length) return;
+
+  const total = targets.length;
   const statusMsg = await bot.sendMessage(adminChatId,
-    `📢 Envoi DM à *${total}* clients bot...\n0/${total}`,
+    `📢 Envoi DM à *${total}* utilisateurs...\n0/${total}`,
     { parse_mode: 'Markdown' }
   );
 
@@ -1141,10 +1159,9 @@ async function _doBroadcastClients(adminChatId, text, videoFileId){
   const keyboard = { inline_keyboard: [[{ text: '🛒 Ouvrir la boutique', web_app: { url: CONFIG.MINI_APP_URL } }]] };
   const caption = '🌿 GoldenTrichomes\n\n' + text;
 
-  for(const doc of snap.docs){
-    const client = doc.data();
-    const tgId   = client.telegramId || client.chatId;
+  for(const tgId of targets){
     if(!tgId){ failed++; continue; }
+    const doc = { ref: db.collection('clients').doc(tgId) }; /* pour suppression si 403 */
 
     try{
       if(videoFileId){
@@ -1160,7 +1177,8 @@ async function _doBroadcastClients(adminChatId, text, videoFileId){
     }catch(e){
       failed++;
       if(e.response?.body?.error_code === 403){
-        await doc.ref.delete().catch(() => {});
+        /* Utilisateur a bloqué le bot — supprimer de clients si présent */
+        await db.collection('clients').doc(String(tgId)).delete().catch(() => {});
       }
     }
 

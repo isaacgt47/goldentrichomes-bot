@@ -131,6 +131,56 @@ app.get('/status', async (req, res) => {
 });
 
 /* /notify — reçoit les messages du panel admin et les envoie via Telegram */
+/* ══════════════════════════════════════════
+   /ping — Mini-app envoie ce ping à chaque ouverture
+   On enregistre / met à jour l'utilisateur dans clients
+   ══════════════════════════════════════════ */
+app.options('/ping', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+app.post('/ping', async (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  try{
+    const { telegramId, username, firstName, lastName, villeId } = req.body;
+    if(!telegramId) return res.status(400).json({ error: 'telegramId requis' });
+
+    if(db){
+      const clientRef = db.collection('clients').doc(String(telegramId));
+      const snap = await clientRef.get();
+
+      if(!snap.exists){
+        /* Nouvel utilisateur — créer le document */
+        await clientRef.set({
+          telegramId:       String(telegramId),
+          chatId:           String(telegramId),
+          telegramUsername: username  || null,
+          firstName:        firstName || '',
+          lastName:         lastName  || '',
+          source:           'miniapp',
+          villeId:          villeId   || null,
+          createdAt:        admin.firestore.FieldValue.serverTimestamp(),
+          lastSeen:         admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`✅ Nouveau client mini-app enregistré : ${telegramId} (@${username || '—'})`);
+      } else {
+        /* Utilisateur existant — mettre à jour lastSeen et villeId */
+        const update = { lastSeen: admin.firestore.FieldValue.serverTimestamp() };
+        if(villeId) update.villeId = villeId;
+        if(username && !snap.data().telegramUsername) update.telegramUsername = username;
+        await clientRef.update(update);
+      }
+    }
+
+    res.json({ ok: true });
+  }catch(e){
+    console.error('/ping error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.options('/notify', (req, res) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
